@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.anikettomar19/photoshop-mcp",
+  "description": "MCP server for Adobe Photoshop automation - control Photoshop from AI assistants",
+  "repository": {
+    "url": "https://github.com/anikettomar19/photoshop-mcp",
+    "source": "github"
+  },
+  "version": "0.2.0",
+  "mcpName": "io.github.anikettomar19/photoshop-mcp",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@anikettomar19/photoshop-mcp",
+      "version": "0.2.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
