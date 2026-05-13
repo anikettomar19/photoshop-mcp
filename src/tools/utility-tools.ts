@@ -306,25 +306,33 @@ async function exportLayerAsPng(
   const applyClip = args.apply_clipping_mask !== false;
   try {
     const api = await new PhotoshopAPIFactory(connection).createAPI();
-    const result = await api.executeScript(`
-      if (app.documents.length === 0) throw new Error('No active document');
-      var origDoc = app.activeDocument;
-      var srcLayer = origDoc.activeLayer;
-      var layerName = srcLayer.name;
 
-      // Detect clipping mask
+    // Step 0: Detect if layer is clipped
+    // Return as pipe-delimited string since ExtendScript toSource() isn't valid JSON
+    const detection = await api.executeScript(`
+      if (app.documents.length === 0) throw new Error('No active document');
+      var srcLayer = app.activeDocument.activeLayer;
       var isClipped = false;
       try { isClipped = srcLayer.grouped; } catch(e) {}
+      return srcLayer.name + '|' + (isClipped ? '1' : '0');
+    `);
 
-      var applyClip = ${applyClip};
+    const detStr = String(detection);
+    const sepIdx = detStr.lastIndexOf('|');
+    const layerName = detStr.substring(0, sepIdx);
+    const isClipped = detStr.substring(sepIdx + 1) === '1';
 
-      if (applyClip && isClipped) {
-        // ── CLIPPING MASK PATH ─────────────────────────────────────────────
-        // Duplicate entire document so we can non-destructively manipulate visibility
+    if (applyClip && isClipped) {
+      // ── CLIPPING MASK PATH (multi-step to avoid PS scripting engine crashes) ──
+      // Large documents crash when duplicate → copy merged → close → add → paste
+      // runs in a single script. Breaking into sequential steps fixes this.
+
+      // Step 1: Duplicate doc, hide all, show target + clip base + ancestors
+      await api.executeScript(`
+        var origDoc = app.activeDocument;
         var dupDoc = origDoc.duplicate('export_clip_tmp');
         app.activeDocument = dupDoc;
 
-        // Recursively hide all layers
         function hideAll(layers) {
           for (var i = 0; i < layers.length; i++) {
             layers[i].visible = false;
@@ -333,7 +341,6 @@ async function exportLayerAsPng(
         }
         hideAll(dupDoc.layers);
 
-        // Find target layer by name, track ancestors (groups) and sibling collection
         function findInfo(layers, name, ancestors) {
           ancestors = ancestors || [];
           for (var i = 0; i < layers.length; i++) {
@@ -348,41 +355,52 @@ async function exportLayerAsPng(
           return null;
         }
 
-        var info = findInfo(dupDoc.layers, layerName);
-        if (!info) throw new Error('Layer not found in duplicate: ' + layerName);
+        var info = findInfo(dupDoc.layers, "${layerName}");
+        if (!info) throw new Error('Layer not found in duplicate: ${layerName}');
 
-        // Show target layer
         info.layer.visible = true;
 
-        // Find clip base: first layer below target in same parent that is NOT grouped
         var clipBase = null;
         for (var ci = info.index + 1; ci < info.parent.length; ci++) {
           var candidate = info.parent[ci];
-          var candidateGrouped = false;
-          try { candidateGrouped = candidate.grouped; } catch(e) {}
-          if (!candidateGrouped) { clipBase = candidate; break; }
+          var cg = false;
+          try { cg = candidate.grouped; } catch(e) {}
+          if (!cg) { clipBase = candidate; break; }
         }
         if (clipBase) clipBase.visible = true;
 
-        // Make all ancestor groups visible so the layers render
         for (var ai = 0; ai < info.ancestors.length; ai++) {
           info.ancestors[ai].visible = true;
         }
 
-        // selection.copy(true) = "Copy Merged" — composites visible layers
-        // respecting the clipping mask, preserving the alpha channel
+        return { ready: true, clipBase: clipBase ? clipBase.name : null };
+      `);
+
+      // Step 2: Copy Merged (composites visible layers respecting clip mask + shape)
+      await api.executeScript(`
+        var dupDoc = app.activeDocument;
         dupDoc.selection.selectAll();
         dupDoc.selection.copy(true);
+        return { copied: true };
+      `);
+
+      // Step 3: Close dup doc, create new transparent doc, paste
+      await api.executeScript(`
+        var dupDoc = app.activeDocument;
+        var ow = dupDoc.width;
+        var oh = dupDoc.height;
+        var ores = dupDoc.resolution;
         dupDoc.close(SaveOptions.DONOTSAVECHANGES);
 
-        // Paste into a new transparent document
-        var newDoc = app.documents.add(
-          origDoc.width, origDoc.height, origDoc.resolution,
-          'clip_export', NewDocumentMode.RGB, DocumentFill.TRANSPARENT
-        );
+        var newDoc = app.documents.add(ow, oh, ores, 'clip_export', NewDocumentMode.RGB, DocumentFill.TRANSPARENT);
         newDoc.paste();
         try { newDoc.selection.deselect(); } catch(e) {}
+        return { pasted: true };
+      `);
 
+      // Step 4: Trim, save, close, return to original doc
+      const result = await api.executeScript(`
+        var newDoc = app.activeDocument;
         ${trim ? `try { newDoc.trim(TrimType.TRANSPARENT, true, true, true, true); } catch(e) {}` : ''}
 
         var saveFile = new File("${outputPath}");
@@ -393,21 +411,29 @@ async function exportLayerAsPng(
         var w = Math.round(newDoc.width.as('px'));
         var h = Math.round(newDoc.height.as('px'));
         newDoc.close(SaveOptions.DONOTSAVECHANGES);
-        app.activeDocument = origDoc;
+
+        // Return to original document (first non-temp doc)
+        if (app.documents.length > 0) app.activeDocument = app.documents[0];
 
         return {
           exported: true,
-          layerName: layerName,
+          layerName: "${layerName}",
           path: "${outputPath}",
           width: w,
           height: h,
           trimmed: ${trim},
-          clippingApplied: true,
-          clipBase: clipBase ? clipBase.name : null
+          clippingApplied: true
         };
+      `);
 
-      } else {
-        // ── SIMPLE PATH (no clipping mask) ────────────────────────────────
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+
+    } else {
+      // ── SIMPLE PATH (no clipping mask) ────────────────────────────────
+      const result = await api.executeScript(`
+        var origDoc = app.activeDocument;
+        var srcLayer = origDoc.activeLayer;
+
         var newDoc = app.documents.add(
           origDoc.width, origDoc.height, origDoc.resolution,
           'layer_export_tmp', NewDocumentMode.RGB, DocumentFill.TRANSPARENT
@@ -416,6 +442,13 @@ async function exportLayerAsPng(
         srcLayer.duplicate(newDoc, ElementPlacement.PLACEATBEGINNING);
         app.activeDocument = newDoc;
 
+        // Smart Objects may export blank after duplicate — rasterize to materialize pixels
+        try {
+          if (newDoc.activeLayer.kind === LayerKind.SMARTOBJECT) {
+            newDoc.activeLayer.rasterize(RasterizeType.ENTIRELAYER);
+          }
+        } catch(e) {}
+
         ${trim ? `try { newDoc.trim(TrimType.TRANSPARENT, true, true, true, true); } catch(e) {}` : ''}
 
         var saveFile = new File("${outputPath}");
@@ -430,16 +463,16 @@ async function exportLayerAsPng(
 
         return {
           exported: true,
-          layerName: layerName,
+          layerName: "${layerName}",
           path: "${outputPath}",
           width: w,
           height: h,
           trimmed: ${trim},
           clippingApplied: false
         };
-      }
-    `);
-    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+      `);
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    }
   } catch (error) {
     return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
   }
