@@ -126,5 +126,42 @@ export function createPsdTools(): ToolDefinition[] {
         }
       },
     },
+    {
+      tool: {
+        name: 'photoshop_get_psd_layer_tree',
+        description:
+          'Extract the full layer tree of a PSD group as structured JSON — without needing Photoshop open. ' +
+          'Returns every layer with: bounds, type, text content (font/size/color/alignment), ' +
+          'FX (stroke/drop_shadow/gradient_overlay), solidfill colors, clip mask flags, and document PPI. ' +
+          'This is the primary data source for the Picasso pipeline (PixelPeep). ' +
+          'Uses psd-tools Python library — all data extracted in one pass.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            psd_path: {
+              type: 'string',
+              description: 'Absolute path to the .psd file',
+            },
+            group_path: {
+              type: 'string',
+              description:
+                'Slash-separated path to the target group: e.g. "Beach" or "Daily Task main pop up"',
+            },
+          },
+          required: ['psd_path', 'group_path'],
+        },
+      },
+      handler: async (args) => {
+        const psdPath = args['psd_path'] as string;
+        const groupPath = args['group_path'] as string;
+
+        try {
+          const output = await runPython([psdPath, '--layer-tree', groupPath]);
+          return ok(output);
+        } catch (err) {
+          return fail(String(err));
+        }
+      },
+    },
   ];
 }
