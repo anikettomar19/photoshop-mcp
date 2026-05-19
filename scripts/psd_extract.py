@@ -197,6 +197,173 @@ def extract_fx(layer):
         print(f"         m_UnderlaySoftness: {softness:.3f}")
 
 
+def extract_layer_tree(psd, group_path):
+    """
+    Extract the full layer tree of a group as JSON with all data PixelPeep needs:
+    bounds, text (font/size/color/alignment), FX (stroke/shadow/gradient), solidfill colors, PPI.
+    Returns JSON string.
+    """
+    import json
+
+    # PPI — extract from RESOLUTION_INFO image resource (ID 1005)
+    ppi = None
+    try:
+        from psd_tools.constants import Resource
+        import struct
+        res_data = psd.image_resources[Resource.RESOLUTION_INFO].data.tobytes()
+        h_int = struct.unpack('>H', res_data[0:2])[0]
+        h_frac = struct.unpack('>H', res_data[2:4])[0]
+        ppi = round(h_int + h_frac / 65536.0)
+    except Exception:
+        pass
+
+    group = get_layer_by_path(psd, group_path)
+
+    def get_color(c):
+        """Extract RGB from psd-tools Descriptor color object."""
+        return {"r": round(float(c[b'Rd  '])), "g": round(float(c[b'Grn '])), "b": round(float(c[b'Bl  ']))}
+
+    def extract_gradient_overlay(layer):
+        try:
+            for e in layer.effects:
+                if type(e).__name__ == 'GradientOverlay' and e.enabled:
+                    g = e.gradient
+                    colors = g[b'Clrs']
+                    if len(colors) >= 2:
+                        s0, s1 = colors[0][b'Clr '], colors[1][b'Clr ']
+                        return {
+                            "top_color": {"r": round(float(s0[b'Rd  '])), "g": round(float(s0[b'Grn '])), "b": round(float(s0[b'Bl  ']))},
+                            "bottom_color": {"r": round(float(s1[b'Rd  '])), "g": round(float(s1[b'Grn '])), "b": round(float(s1[b'Bl  ']))},
+                            "angle": float(e.angle), "scale": float(e.scale), "opacity": float(e.opacity)
+                        }
+        except (AttributeError, KeyError, TypeError, IndexError):
+            pass
+        return None
+
+    def extract_stroke(layer):
+        try:
+            for e in layer.effects:
+                if type(e).__name__ == 'Stroke' and e.enabled:
+                    return {"size": float(e.size), "color": get_color(e.color)}
+        except (AttributeError, KeyError, TypeError):
+            pass
+        return None
+
+    def extract_dropshadow(layer):
+        try:
+            for e in layer.effects:
+                if type(e).__name__ == 'DropShadow' and e.enabled:
+                    return {"distance": float(e.distance), "size": float(e.size),
+                            "angle": float(e.angle), "color": get_color(e.color)}
+        except (AttributeError, KeyError, TypeError):
+            pass
+        return None
+
+    def get_solidfill_color(layer):
+        try:
+            if Tag.VECTOR_STROKE_CONTENT_DATA in layer.tagged_blocks:
+                data = layer.tagged_blocks[Tag.VECTOR_STROKE_CONTENT_DATA].data
+                clr = data[b'Clr ']
+                return {"r": round(float(clr[b'Rd  '])), "g": round(float(clr[b'Grn '])), "b": round(float(clr[b'Bl  '])), "a": 255}
+        except (AttributeError, KeyError, TypeError):
+            pass
+        return None
+
+    def get_text_data(layer):
+        try:
+            ed = layer.engine_dict
+            sr = ed['StyleRun']['RunArray'][0]['StyleSheet']['StyleSheetData']
+            font_idx = int(sr.get('Font', 0))
+            font_size = float(sr.get('FontSize', 0))
+            rd = layer.resource_dict
+            fs = rd.get('FontSet', rd.get(b'FontSet', []))
+            font_name = "unknown"
+            if font_idx < len(fs):
+                fn = fs[font_idx].get('Name', fs[font_idx].get(b'Name', 'unknown'))
+                font_name = fn.decode() if isinstance(fn, bytes) else str(fn)
+            font_name = font_name.strip("'\"")
+            fc = sr.get('FillColor', None)
+            fr, fg, fb = 255, 255, 255
+            if fc:
+                vals = fc.get('Values', [1, 0, 0, 0])
+                fr = round(float(vals[1]) * 255)
+                fg = round(float(vals[2]) * 255)
+                fb = round(float(vals[3]) * 255)
+            pr = ed['ParagraphRun']['RunArray'][0]['ParagraphSheet']['Properties']
+            just = int(pr.get('Justification', 2))
+            return {
+                "content": layer.text or "", "font": font_name,
+                "psd_font_size": font_size,
+                "alignment": {0: "LEFT", 1: "RIGHT", 2: "CENTER"}.get(just, "CENTER"),
+                "fill_color": {"r": fr, "g": fg, "b": fb, "a": 255}
+            }
+        except Exception as e:
+            return {"content": layer.text or "", "font": "unknown", "psd_font_size": 0,
+                    "alignment": "CENTER", "fill_color": {"r": 255, "g": 255, "b": 255, "a": 255},
+                    "_error": str(e)}
+
+    layers = []
+
+    def walk(container, parent_path, parent_bounds, depth):
+        for layer in container:
+            if not layer.visible:
+                continue
+            path = f"{parent_path}/{layer.name}"
+            bbox = layer.bbox
+            bounds = {"left": bbox[0], "top": bbox[1], "right": bbox[2], "bottom": bbox[3],
+                      "width": bbox[2] - bbox[0], "height": bbox[3] - bbox[1]}
+            kind = str(layer.kind)
+            is_text = kind == "type"
+            is_so = kind == "smartobject"
+            is_fill = kind in ("solidcolorfill", "shape")
+            is_group = kind == "group"
+            is_pixel = kind == "pixel"
+
+            type_str = ("TEXT" if is_text else "SMARTOBJECT" if is_so else "SOLIDFILL" if is_fill
+                        else "GROUP" if is_group else "NORMAL")
+
+            entry = {
+                "path": path, "name": layer.name, "type": f"LayerKind.{type_str}",
+                "visible": True, "depth": depth, "bounds": bounds,
+                "parent_path": parent_path, "parent_bounds": parent_bounds,
+                "text": None, "fx": None,
+                "is_smart_object": is_so,
+                "has_clip_mask": getattr(layer._record, 'clipping', 0) == 1 if hasattr(layer, '_record') else False,
+                "export_needed": is_so or (is_pixel and bounds["width"] > 0),
+                "button_text": None,
+                "solidfill_color": get_solidfill_color(layer) if is_fill else None
+            }
+
+            if is_text:
+                entry["export_needed"] = False
+                entry["text"] = get_text_data(layer)
+                entry["fx"] = {
+                    "stroke": extract_stroke(layer),
+                    "drop_shadow": extract_dropshadow(layer),
+                    "gradient_overlay": extract_gradient_overlay(layer)
+                }
+            if is_fill:
+                entry["export_needed"] = False
+            if is_group:
+                entry["export_needed"] = False
+
+            layers.append(entry)
+            if is_group:
+                walk(layer, path, bounds, depth + 1)
+
+    gb = {"left": group.bbox[0], "top": group.bbox[1], "right": group.bbox[2], "bottom": group.bbox[3],
+          "width": group.bbox[2] - group.bbox[0], "height": group.bbox[3] - group.bbox[1]}
+    walk(group, group_path, gb, 1)
+
+    result = {
+        "document": {"width": psd.width, "height": psd.height, "ppi": ppi},
+        "target_group": group_path,
+        "group_bounds": gb,
+        "layers": layers
+    }
+    return json.dumps(result)
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print(__doc__)
@@ -209,6 +376,9 @@ if __name__ == "__main__":
         layer_path = sys.argv[3]
         layer = get_layer_by_path(psd, layer_path)
         extract_fx(layer)
+    elif sys.argv[2] == "--layer-tree":
+        group_path = sys.argv[3]
+        print(extract_layer_tree(psd, group_path))
     else:
         layer_path = sys.argv[2]
         out_path = sys.argv[3] if len(sys.argv) > 3 else "/tmp/extracted_layer.png"
