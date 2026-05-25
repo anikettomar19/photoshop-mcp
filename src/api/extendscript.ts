@@ -1587,6 +1587,91 @@ export const ExtendScriptSnippets = {
   `,
 
   /**
+   * Get Unity RectTransform values for a layer.
+   * Computes anchoredPosition and sizeDelta relative to the layer's parent group
+   * (or the document if the layer is top-level).
+   * Y is negated to convert from PSD (Y-down) to Unity (Y-up) coordinate space.
+   */
+  getLayerRT: (layerPath: string, scaleFactor: number) => `
+    if (app.documents.length === 0) {
+      throw new Error('No active document');
+    }
+    var doc = app.activeDocument;
+
+    // Navigate to layer by path
+    var parts = "${layerPath.replace(/"/g, '\\"')}".split('/');
+    var collection = doc.layers;
+    var layer = null;
+
+    for (var p = 0; p < parts.length; p++) {
+      var found = false;
+      for (var i = 0; i < collection.length; i++) {
+        if (collection[i].name === parts[p]) {
+          layer = collection[i];
+          found = true;
+          if (p < parts.length - 1) {
+            if (layer.typename !== "LayerSet") {
+              throw new Error('Layer "' + parts[p] + '" is not a group');
+            }
+            collection = layer.layers;
+          }
+          break;
+        }
+      }
+      if (!found) {
+        throw new Error('Layer not found at path segment: ' + parts[p]);
+      }
+    }
+
+    var sf = ${scaleFactor};
+
+    // Layer bounds
+    var lb = layer.bounds;
+    var lLeft   = lb[0].as('px');
+    var lTop    = lb[1].as('px');
+    var lRight  = lb[2].as('px');
+    var lBottom = lb[3].as('px');
+    var lW = lRight - lLeft;
+    var lH = lBottom - lTop;
+    var lCX = (lLeft + lRight) / 2;
+    var lCY = (lTop + lBottom) / 2;
+
+    // Parent bounds (group or document)
+    var pLeft, pTop, pRight, pBottom;
+    if (layer.parent && layer.parent !== doc) {
+      var pb = layer.parent.bounds;
+      pLeft   = pb[0].as('px');
+      pTop    = pb[1].as('px');
+      pRight  = pb[2].as('px');
+      pBottom = pb[3].as('px');
+    } else {
+      pLeft   = 0;
+      pTop    = 0;
+      pRight  = doc.width.as('px');
+      pBottom = doc.height.as('px');
+    }
+    var pCX = (pLeft + pRight) / 2;
+    var pCY = (pTop + pBottom) / 2;
+
+    // Compute RT (negate Y for PSD-down → Unity-up)
+    var posX  = Math.round((lCX - pCX) * sf * 100) / 100;
+    var posY  = Math.round(-(lCY - pCY) * sf * 100) / 100;
+    var sizeW = Math.round(lW * sf * 100) / 100;
+    var sizeH = Math.round(lH * sf * 100) / 100;
+
+    return {
+      pos:  [posX, posY],
+      size: [sizeW, sizeH],
+      rot:  0,
+      psd_bounds: {
+        layer:  { left: lLeft, top: lTop, right: lRight, bottom: lBottom, width: lW, height: lH },
+        parent: { left: pLeft, top: pTop, right: pRight, bottom: pBottom }
+      },
+      scale_factor: sf
+    };
+  `,
+
+  /**
    * Move layer down one position
    */
   moveLayerDown: () => `
