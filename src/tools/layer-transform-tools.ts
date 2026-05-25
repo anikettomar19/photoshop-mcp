@@ -7,6 +7,36 @@ export function createLayerTransformTools(connection: PhotoshopConnection): Tool
   return [
     {
       tool: {
+        name: 'photoshop_get_layer_rt',
+        description:
+          'Compute Unity RectTransform values (anchoredPosition + sizeDelta) for a PSD layer.\n\n' +
+          'Reads the layer bounds and its parent group bounds from the active document, then ' +
+          'returns center-relative position and size scaled by the given factor.\n' +
+          'Y is negated to convert from PSD (Y-down) to Unity (Y-up) coordinate space.\n\n' +
+          'If the layer is top-level (no parent group), the document bounds are used as parent.\n\n' +
+          'Returns: { pos: [x, y], size: [w, h], rot: 0, psd_bounds: {...}, scale_factor }',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            layer_path: {
+              type: 'string',
+              description:
+                'Path to the layer through the group hierarchy, e.g. "GroupName/SubGroup/LayerName"',
+            },
+            scale_factor: {
+              type: 'number',
+              description:
+                'Scale factor to convert PSD pixels to Unity units (e.g. 0.305 for a 640×1280 canvas)',
+              minimum: 0.001,
+            },
+          },
+          required: ['layer_path', 'scale_factor'],
+        },
+      },
+      handler: async (args) => getLayerRT(connection, args),
+    },
+    {
+      tool: {
         name: 'photoshop_fit_layer_to_document',
         description:
           'Scale the active layer to fit the document canvas while maintaining aspect ratio',
@@ -219,6 +249,41 @@ async function rotateLayer(
         {
           type: 'text' as const,
           text: `Error rotating layer: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
+  }
+}
+
+async function getLayerRT(
+  connection: PhotoshopConnection,
+  args: Record<string, unknown>
+): Promise<ToolResult> {
+  const layerPath = args.layer_path as string;
+  const scaleFactor = args.scale_factor as number;
+
+  try {
+    const apiFactory = new PhotoshopAPIFactory(connection);
+    const api = await apiFactory.createAPI();
+
+    const script = ExtendScriptSnippets.getLayerRT(layerPath, scaleFactor);
+    const result = await api.executeScript(script);
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(result, null, 2),
+        },
+      ],
+    };
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error getting layer RT: ${error instanceof Error ? error.message : String(error)}`,
         },
       ],
       isError: true,
