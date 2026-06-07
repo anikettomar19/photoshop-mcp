@@ -1,15 +1,44 @@
-# photoshop-mcp
+# Photoshop MCP
 
-MCP server for controlling Adobe Photoshop from AI assistants (Claude, Cursor, etc.) via natural language.
+MCP server that gives AI assistants (Claude, Cursor, Windsurf, etc.) full control over Adobe Photoshop through natural language.
 
 > Not affiliated with Adobe Inc.
 
-## Setup
+## What can it do?
+
+80 tools across 16 categories — from creating documents and manipulating layers to running filters, extracting PSD data, and searching sprite catalogs.
+
+| Category | Tools | Examples |
+|---|---|---|
+| **Document** | 4 | Create, open, save, close documents |
+| **Layers** | 5 | Create, delete, duplicate, group, get layer tree |
+| **Layer Properties** | 9 | Opacity, blend mode, visibility, lock, rename, merge, flatten, rasterize |
+| **Layer Ordering** | 5 | Move to top/bottom, up/down, to specific position |
+| **Layer Transform** | 4 | Move, scale, rotate, fit to document |
+| **Layer Effects** | 4 | Drop shadow, stroke, read effects, remove effects |
+| **Text** | 4 | Create text layers, update content, font, color, alignment |
+| **Selections & Masks** | 7 | Rectangle select, select all, invert, create/apply/delete masks |
+| **Image** | 2 | Resize, crop |
+| **Filters** | 4 | Gaussian blur, sharpen, noise, motion blur |
+| **Adjustments** | 6 | Brightness/contrast, hue/saturation, levels, auto levels, desaturate, invert |
+| **History** | 3 | Undo, redo, get history states |
+| **Actions** | 2 | Play recorded actions, execute custom ExtendScript |
+| **Image Placement** | 2 | Place image as layer, open image as document |
+| **Utility** | 10 | Session info, color sampling, export layer PNG, guides, duplicate document |
+| **PSD Extraction** | 2 | Extract layers and layer effects from PSD files without Photoshop |
+| **Sprite Tools** | 5 | Visual sprite search, catalog tagging, perceptual hash matching |
+
+## Quick Start
+
+### Prerequisites
+
+- Node.js >= 18
+- Adobe Photoshop (2012-2026+ supported)
+- macOS (AppleScript/OSA) or Windows (COM automation)
 
 ### Claude Desktop
 
-`~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
-`%APPDATA%\Claude\claude_desktop_config.json` (Windows)
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
 ```json
 {
@@ -18,17 +47,16 @@ MCP server for controlling Adobe Photoshop from AI assistants (Claude, Cursor, e
       "command": "npx",
       "args": ["-y", "github:anikettomar19/photoshop-mcp"],
       "env": {
-        "LOG_LEVEL": "1",
-        "PHOTOSHOP_PATH": "/Applications/Adobe Photoshop 2026/Adobe Photoshop 2026.app"
+        "PHOTOSHOP_PATH": "/Applications/Adobe Photoshop 2025/Adobe Photoshop 2025.app"
       }
     }
   }
 }
 ```
 
-### Cursor
+### Cursor / Windsurf
 
-`.cursor/mcp.json`
+Add to `.cursor/mcp.json` or `.windsurf/mcp.json`:
 
 ```json
 {
@@ -37,8 +65,7 @@ MCP server for controlling Adobe Photoshop from AI assistants (Claude, Cursor, e
       "command": "npx",
       "args": ["-y", "github:anikettomar19/photoshop-mcp"],
       "env": {
-        "LOG_LEVEL": "1",
-        "PHOTOSHOP_PATH": "/Applications/Adobe Photoshop 2026/Adobe Photoshop 2026.app"
+        "PHOTOSHOP_PATH": "/Applications/Adobe Photoshop 2025/Adobe Photoshop 2025.app"
       }
     }
   }
@@ -47,42 +74,26 @@ MCP server for controlling Adobe Photoshop from AI assistants (Claude, Cursor, e
 
 ### Environment Variables
 
-| Variable | Description |
-|---|---|
-| `PHOTOSHOP_PATH` | Path to Photoshop app (auto-detected if omitted) |
-| `LOG_LEVEL` | `0`=DEBUG, `1`=INFO, `2`=WARN, `3`=ERROR |
+| Variable | Description | Default |
+|---|---|---|
+| `PHOTOSHOP_PATH` | Path to Photoshop application | Auto-detected |
+| `LOG_LEVEL` | `0` DEBUG, `1` INFO, `2` WARN, `3` ERROR | `1` |
 
-## Tools
+## PSD Extraction (Offline)
 
-50+ tools across these categories:
+The `photoshop_extract_psd_layer` and `photoshop_extract_layer_fx` tools can read PSD files directly without Photoshop running. Requires Python packages:
 
-- **Document** — create, open, save, close, crop, resize
-- **Layers** — create, delete, duplicate, merge, flatten, reorder
-- **Layer Properties** — opacity, blend mode, visibility, lock, rename
-- **Layer Transform** — move, scale, rotate, fit to document
-- **Text** — create text layer, update content, font, size, color, alignment
-- **Filters** — Gaussian blur, sharpen, noise, motion blur
-- **Adjustments** — brightness/contrast, hue/saturation, auto levels, desaturate, invert
-- **Selections & Masks** — rectangle select, select all, invert, create/apply/delete mask
-- **History** — undo, redo, get history states
-- **Actions** — play recorded actions, execute custom ExtendScript
-- **PSD Tools** — extract layers and effects from PSD without Photoshop open (requires `psd-tools` + `Pillow` Python packages)
-- **Sprite Tools** — visual sprite search and catalog for Unity projects
+```bash
+pip install psd-tools Pillow
+```
 
 ## Troubleshooting
 
-**Photoshop not found** — set `PHOTOSHOP_PATH` to your installation path.
-
-**Script timeout** — break large operations into smaller steps (default timeout: 30s).
-
-**Debug logs** — set `LOG_LEVEL=0`.
-
-## Platform
-
-- macOS — AppleScript/OSA
-- Windows — COM automation
-
-Supports Photoshop 2012–2026+.
+| Problem | Solution |
+|---|---|
+| Photoshop not found | Set `PHOTOSHOP_PATH` to your installation path |
+| Script timeout | Break large operations into smaller steps (default: 30s) |
+| Need debug logs | Set `LOG_LEVEL=0` |
 
 ## License
 
