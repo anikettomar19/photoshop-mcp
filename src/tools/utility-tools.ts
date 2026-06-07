@@ -191,6 +191,64 @@ export function createUtilityTools(connection: PhotoshopConnection): ToolDefinit
       },
       handler: async (args) => applyLevels(connection, args),
     },
+    {
+      tool: {
+        name: 'photoshop_batch_export_layers',
+        description:
+          'Export multiple layers as isolated PNGs in a single call. ' +
+          'Each layer is scaled, isolated (siblings hidden), cropped to bounds, merged, trimmed, and saved. ' +
+          'The document is restored to its original state after each export via history state undo. ' +
+          'Supports clipping masks: when apply_clipping_mask is true, the clip base layer is composited with the target. ' +
+          'Results are written to /tmp/batch_export_results.txt (pipe-delimited: output_path|status|width|height). ' +
+          'Use this instead of multiple photoshop_export_layer_as_png + photoshop_scale_layer + photoshop_undo calls — ' +
+          'replaces 4N MCP calls with 1.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            layers: {
+              type: 'array',
+              description: 'Array of layer export configs',
+              items: {
+                type: 'object',
+                properties: {
+                  path: {
+                    type: 'string',
+                    description:
+                      'Slash-separated layer path, e.g. "Group Name/Layer Name". ' +
+                      'Trailing/leading spaces in group names are matched flexibly.',
+                  },
+                  output_path: {
+                    type: 'string',
+                    description: 'Absolute output path for the PNG, e.g. /tmp/my_sprite.png',
+                  },
+                  scale_percent: {
+                    type: 'number',
+                    description:
+                      'Scale percentage to resize the layer before export (e.g. 29.6 for ~30%). ' +
+                      '100 = no scaling.',
+                    default: 100,
+                  },
+                  apply_clipping_mask: {
+                    type: 'boolean',
+                    description:
+                      'When true, find the clipping base layer (layer below) and composite both during export.',
+                    default: false,
+                  },
+                  trim: {
+                    type: 'boolean',
+                    description: 'Trim transparent pixels from edges (default: true)',
+                    default: true,
+                  },
+                },
+                required: ['path', 'output_path'],
+              },
+            },
+          },
+          required: ['layers'],
+        },
+      },
+      handler: async (args) => batchExportLayers(connection, args),
+    },
   ];
 }
 
@@ -563,6 +621,229 @@ async function clearGuides(connection: PhotoshopConnection): Promise<ToolResult>
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
     return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+  }
+}
+
+async function batchExportLayers(
+  connection: PhotoshopConnection,
+  args: Record<string, unknown>
+): Promise<ToolResult> {
+  const layers = args.layers as Array<{
+    path: string;
+    output_path: string;
+    scale_percent?: number;
+    apply_clipping_mask?: boolean;
+    trim?: boolean;
+  }>;
+
+  if (!layers || layers.length === 0) {
+    return {
+      content: [{ type: 'text' as const, text: 'Error: layers array is empty or missing' }],
+      isError: true,
+    };
+  }
+
+  try {
+    const api = await new PhotoshopAPIFactory(connection).createAPI();
+
+    // Build the layer configs as a JS literal for injection into ExtendScript
+    const configEntries = layers.map((l) => {
+      const path = l.path.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      const outPath = l.output_path.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      const scale = l.scale_percent ?? 100;
+      const clip = l.apply_clipping_mask ?? false;
+      const trim = l.trim !== false;
+      return `{path:"${path}",output_path:"${outPath}",scale_percent:${scale},apply_clipping_mask:${clip},trim:${trim}}`;
+    });
+    const configArrayStr = '[' + configEntries.join(',') + ']';
+
+    const result = await api.executeScript(`
+      var doc = app.activeDocument;
+      var CONFIGS = ${configArrayStr};
+      var results = [];
+
+      function findLayer(parent, name) {
+        name = name.replace(/^\\s+|\\s+$/g, '');
+        try {
+          for (var j = 0; j < parent.layerSets.length; j++) {
+            if (parent.layerSets[j].name.replace(/^\\s+|\\s+$/g, '') === name)
+              return parent.layerSets[j];
+          }
+        } catch(e) {}
+        try {
+          for (var j = 0; j < parent.artLayers.length; j++) {
+            if (parent.artLayers[j].name.replace(/^\\s+|\\s+$/g, '') === name)
+              return parent.artLayers[j];
+          }
+        } catch(e) {}
+        return null;
+      }
+
+      function findLayerByPath(path) {
+        var parts = path.split('/');
+        var current = doc;
+        for (var i = 0; i < parts.length; i++) {
+          current = findLayer(current, parts[i]);
+          if (!current) return null;
+        }
+        return current;
+      }
+
+      function hideAllChildren(parent) {
+        try { for (var i = 0; i < parent.layerSets.length; i++) parent.layerSets[i].visible = false; } catch(e) {}
+        try { for (var i = 0; i < parent.artLayers.length; i++) parent.artLayers[i].visible = false; } catch(e) {}
+      }
+
+      function isolateLayerPath(path) {
+        var parts = path.split('/');
+        var current = doc;
+        hideAllChildren(doc);
+        for (var i = 0; i < parts.length; i++) {
+          var found = findLayer(current, parts[i]);
+          if (found) {
+            found.visible = true;
+            if (i < parts.length - 1) hideAllChildren(found);
+            current = found;
+          }
+        }
+        return current;
+      }
+
+      function findClipBase(targetLayer) {
+        var parent = targetLayer.parent;
+        try {
+          var layers = parent.layers;
+          var foundTarget = false;
+          for (var i = 0; i < layers.length; i++) {
+            if (foundTarget) return layers[i];
+            if (layers[i] === targetLayer) foundTarget = true;
+          }
+        } catch(e) {}
+        return null;
+      }
+
+      for (var ci = 0; ci < CONFIGS.length; ci++) {
+        var cfg = CONFIGS[ci];
+        try {
+          var layer = findLayerByPath(cfg.path);
+          if (!layer) {
+            results.push(cfg.output_path + '|NOT_FOUND|0|0');
+            continue;
+          }
+
+          doc.activeLayer = layer;
+          var preState = doc.activeHistoryState;
+
+          // Scale if needed
+          if (cfg.scale_percent !== 100) {
+            layer.resize(cfg.scale_percent, cfg.scale_percent, AnchorPosition.MIDDLECENTER);
+          }
+
+          // Isolate visibility
+          isolateLayerPath(cfg.path);
+
+          // Clipping mask handling
+          if (cfg.apply_clipping_mask) {
+            var clipBase = findClipBase(layer);
+            if (clipBase) {
+              clipBase.visible = true;
+              if (cfg.scale_percent !== 100) {
+                clipBase.resize(cfg.scale_percent, cfg.scale_percent, AnchorPosition.MIDDLECENTER);
+              }
+            }
+          }
+
+          // Crop to layer bounds
+          var b = layer.bounds;
+          doc.crop([b[0], b[1], b[2], b[3]]);
+
+          // Merge visible
+          doc.mergeVisibleLayers();
+
+          // Trim transparent pixels
+          if (cfg.trim) {
+            try { doc.trim(TrimType.TRANSPARENT, true, true, true, true); } catch(e) {}
+          }
+
+          var w = Math.round(doc.width.as('px'));
+          var h = Math.round(doc.height.as('px'));
+
+          // Save as PNG
+          var pngOpts = new PNGSaveOptions();
+          pngOpts.compression = 6;
+          pngOpts.interlaced = false;
+          doc.saveAs(new File(cfg.output_path), pngOpts, true, Extension.LOWERCASE);
+
+          results.push(cfg.output_path + '|OK|' + w + '|' + h);
+
+          // Undo all changes back to pre-state
+          doc.activeHistoryState = preState;
+
+        } catch(e) {
+          try { doc.activeHistoryState = preState; } catch(e2) {}
+          results.push(cfg.output_path + '|ERROR|' + e.message + '|0');
+        }
+      }
+
+      return results.join('\\n');
+    `);
+
+    // Parse pipe-delimited results into structured JSON
+    const resultStr = String(result);
+    const lines = resultStr.split('\n').filter((l: string) => l.length > 0);
+    const exportResults: object[] = [];
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (const line of lines) {
+      const parts = line.split('|');
+      const status = parts[1];
+      if (status === 'OK') {
+        successCount++;
+        exportResults.push({
+          output_path: parts[0],
+          status: 'OK',
+          width: parseInt(parts[2], 10),
+          height: parseInt(parts[3], 10),
+        });
+      } else {
+        errorCount++;
+        exportResults.push({
+          output_path: parts[0],
+          status,
+          error: status === 'ERROR' ? parts[2] : undefined,
+        });
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(
+            {
+              batch_export: true,
+              total: layers.length,
+              success: successCount,
+              errors: errorCount,
+              results: exportResults,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Batch export error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 

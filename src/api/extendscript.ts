@@ -29,7 +29,7 @@ function getContextInfo() {
       resolution: doc.resolution,
       colorMode: String(doc.mode),
       layerCount: doc.layers.length,
-      hasSelection: doc.selection.bounds ? true : false
+      hasSelection: (function() { try { return doc.selection.bounds ? true : false; } catch(e) { return false; } })()
     };
     
     if (doc.activeLayer) {
@@ -1147,9 +1147,20 @@ export const ExtendScriptSnippets = {
   /**
    * Execute custom JavaScript code
    */
-  executeCustomScript: (code: string) => `
-    ${code}
-  `,
+  executeCustomScript: (code: string) => {
+    // Auto-add return to the last expression if user didn't include one
+    const trimmed = code.trim();
+    const lines = trimmed.split('\n');
+    const lastLine = lines[lines.length - 1].trim();
+
+    // Add return if last line is an expression (not a statement like if/for/var/return/}/;)
+    const isStatement = /^(if|for|while|var|let|const|return|throw|try|catch|function|\/\/|\}|;$)/.test(lastLine);
+    if (!isStatement && !lastLine.startsWith('return ')) {
+      lines[lines.length - 1] = 'return ' + lines[lines.length - 1];
+    }
+
+    return lines.join('\n');
+  },
 
   /**
    * Rasterize active layer
@@ -1271,22 +1282,44 @@ export const ExtendScriptSnippets = {
       throw new Error('No active document');
     }
     var doc = app.activeDocument;
-    
+
     var states = [];
     var currentIndex = -1;
-    
-    for (var i = 0; i < doc.historyStates.length; i++) {
-      var state = doc.historyStates[i];
-      states.push({
-        name: state.name,
-        snapshot: state.snapshot || false
-      });
-      
-      if (state === doc.activeHistoryState) {
-        currentIndex = i;
-      }
+
+    var hsLen = 0;
+    try { hsLen = doc.historyStates.length; } catch(eLen) {
+      return {
+        totalStates: 0,
+        currentIndex: -1,
+        currentState: 'Unknown',
+        canUndo: false,
+        canRedo: false,
+        states: [],
+        error: 'Cannot access history states: ' + eLen.message,
+        context: getContextInfo()
+      };
     }
-    
+
+    var activeStateName = '';
+    try { activeStateName = doc.activeHistoryState.name; } catch(eActive) {}
+
+    for (var i = 0; i < hsLen; i++) {
+      try {
+        var state = doc.historyStates[i];
+        var stateName = '';
+        try { stateName = state.name; } catch(e2) { stateName = 'State ' + i; }
+        var isSnapshot = false;
+        try { isSnapshot = state.snapshot || false; } catch(e3) {}
+        states.push({
+          name: stateName,
+          snapshot: isSnapshot
+        });
+        if (stateName === activeStateName) {
+          currentIndex = i;
+        }
+      } catch(e5) {}
+    }
+
     var result = {
       totalStates: states.length,
       currentIndex: currentIndex,
