@@ -105,11 +105,9 @@ export class MacOSExecutor implements ScriptExecutor {
   private createAppleScriptWrapper(jsxPath: string): string {
     // Use POSIX file path for AppleScript
     const posixPath = jsxPath.replace(/\\/g, '/');
-    
+
     return `tell application "${this.appName}"
-\tactivate
-\tset jsxFile to POSIX file "${posixPath}"
-\tdo javascript "$.evalFile(decodeURI('${encodeURI(posixPath)}'))"
+\tdo javascript "$.evalFile('${posixPath}')"
 end tell`;
   }
 
