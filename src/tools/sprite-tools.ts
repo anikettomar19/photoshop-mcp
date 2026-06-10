@@ -15,6 +15,7 @@ interface SpriteEntry {
   phash: number[];
   hsvHist: number[];
   alphaHash: number[];
+  spriteBorder?: [number, number, number, number]; // [left, bottom, right, top] from .meta
 }
 
 interface IndexFile {
@@ -158,6 +159,77 @@ async function computeAlphaHash(imagePath: string, size = 16): Promise<number[]>
 }
 
 // ---------------------------------------------------------------------------
+// 9-slice border + stretch
+// ---------------------------------------------------------------------------
+
+function readSpriteBorder(absPath: string): [number, number, number, number] | undefined {
+  const metaPath = absPath + '.meta';
+  if (!existsSync(metaPath)) return undefined;
+  try {
+    const content = readFileSync(metaPath, 'utf8');
+    const m = content.match(/spriteBorder:\s*\{x:\s*([\d.]+),\s*y:\s*([\d.]+),\s*z:\s*([\d.]+),\s*w:\s*([\d.]+)\}/);
+    if (!m) return undefined;
+    const border: [number, number, number, number] = [parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3]), parseFloat(m[4])];
+    if (border.every(v => v === 0)) return undefined;
+    return border;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 9-slice stretch a Jimp image to target width/height.
+ * Border = [left, bottom, right, top] (Unity spriteBorder convention).
+ */
+async function nineSliceStretch(
+  img: InstanceType<typeof Jimp>,
+  border: [number, number, number, number],
+  tw: number,
+  th: number,
+): Promise<any> {
+  let [bl, bb, br, bt] = border.map(Math.round);
+  const iw = img.width;
+  const ih = img.height;
+
+  bl = Math.min(bl, Math.floor(iw / 2));
+  br = Math.min(br, Math.floor(iw / 2));
+  bt = Math.min(bt, Math.floor(ih / 2));
+  bb = Math.min(bb, Math.floor(ih / 2));
+  if (bl + br >= iw) { bl = Math.floor(iw / 3); br = Math.floor(iw / 3); }
+  if (bt + bb >= ih) { bt = Math.floor(ih / 3); bb = Math.floor(ih / 3); }
+
+  const cw = iw - bl - br;
+  const ch = ih - bt - bb;
+  const ncw = Math.max(1, tw - bl - br);
+  const nch = Math.max(1, th - bt - bb);
+
+  const result = new Jimp({ width: tw, height: th, color: 0x00000000 });
+
+  const regions: Array<{ sx: number; sy: number; sw: number; sh: number; dx: number; dy: number; dw: number; dh: number }> = [
+    { sx: 0, sy: 0, sw: bl, sh: bt, dx: 0, dy: 0, dw: bl, dh: bt },
+    { sx: bl, sy: 0, sw: cw, sh: bt, dx: bl, dy: 0, dw: ncw, dh: bt },
+    { sx: iw - br, sy: 0, sw: br, sh: bt, dx: tw - br, dy: 0, dw: br, dh: bt },
+    { sx: 0, sy: bt, sw: bl, sh: ch, dx: 0, dy: bt, dw: bl, dh: nch },
+    { sx: bl, sy: bt, sw: cw, sh: ch, dx: bl, dy: bt, dw: ncw, dh: nch },
+    { sx: iw - br, sy: bt, sw: br, sh: ch, dx: tw - br, dy: bt, dw: br, dh: nch },
+    { sx: 0, sy: ih - bb, sw: bl, sh: bb, dx: 0, dy: th - bb, dw: bl, dh: bb },
+    { sx: bl, sy: ih - bb, sw: cw, sh: bb, dx: bl, dy: th - bb, dw: ncw, dh: bb },
+    { sx: iw - br, sy: ih - bb, sw: br, sh: bb, dx: tw - br, dy: th - bb, dw: br, dh: bb },
+  ];
+
+  for (const r of regions) {
+    if (r.sw <= 0 || r.sh <= 0 || r.dw <= 0 || r.dh <= 0) continue;
+    const piece = img.clone().crop({ x: r.sx, y: r.sy, w: r.sw, h: r.sh });
+    if (piece.width !== r.dw || piece.height !== r.dh) {
+      piece.resize({ w: r.dw, h: r.dh });
+    }
+    (result as any).composite(piece, r.dx, r.dy);
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Similarity metrics
 // ---------------------------------------------------------------------------
 
@@ -285,32 +357,77 @@ async function findSimilarSprites(args: Record<string, unknown>): Promise<ToolRe
     const qAlpha = await computeAlphaHash(queryPath);
     const qImg   = await Jimp.read(queryPath);
     const qAspect = qImg.bitmap.width / (qImg.bitmap.height || 1);
+    const qWidth  = qImg.bitmap.width;
+    const qHeight = qImg.bitmap.height;
 
     const catalog = loadCatalog(catalogPath);
     const results: object[] = [];
 
     for (const [rel, entry] of Object.entries(index)) {
+      // Standard comparison (native resolution)
       const aspectDiff = Math.abs(entry.aspectRatio - qAspect) / Math.max(qAspect, 0.01);
-      if (aspectDiff > 0.25) continue; // fast pre-filter
+      const nativePhash = hammingSim(qPhash, entry.phash);
+      const nativeHsv = chiSquaredSim(qHsv, entry.hsvHist);
+      const nativeAlpha = hammingSim(qAlpha, entry.alphaHash);
+      let sc = aspectDiff > 0.25
+        ? 0
+        : combinedScore(nativePhash, nativeHsv, nativeAlpha, aspectDiff);
+      let matchType = 'native';
+      let breakdown = { phash: nativePhash, hsv: nativeHsv, alpha: nativeAlpha };
 
-      const sc = combinedScore(
-        hammingSim(qPhash, entry.phash),
-        chiSquaredSim(qHsv, entry.hsvHist),
-        hammingSim(qAlpha, entry.alphaHash),
-        aspectDiff
-      );
+      // 9-slice stretch comparison: if the sprite has borders and the query is
+      // significantly larger, stretch the sprite to query size and re-compare.
+      // This catches cases where a small 9-slice tile matches a large PSD panel.
+      if (entry.spriteBorder && qWidth > entry.width * 1.5 && qHeight > entry.height * 1.2) {
+        try {
+          const absPath = join(projectRoot, rel);
+          const spriteImg = await Jimp.read(absPath);
+          const stretched = await nineSliceStretch(spriteImg as any, entry.spriteBorder, qWidth, qHeight);
+
+          // Write stretched to temp file and compute hashes
+          const tmpPath = `/tmp/_9slice_stretch_${Date.now()}.png`;
+          const buf = await stretched.getBuffer('image/png');
+          writeFileSync(tmpPath, buf);
+          const sPhash = await computePhash(tmpPath);
+          const sHsv = await computeHsvHistogram(tmpPath);
+          const sAlpha = await computeAlphaHash(tmpPath);
+          try { const { unlinkSync } = await import('fs'); unlinkSync(tmpPath); } catch {}
+
+          const stretchedAspectDiff = 0; // same size after stretch
+          const stretchSc = combinedScore(
+            hammingSim(qPhash, sPhash),
+            chiSquaredSim(qHsv, sHsv),
+            hammingSim(qAlpha, sAlpha),
+            stretchedAspectDiff
+          );
+
+          if (stretchSc > sc) {
+            sc = stretchSc;
+            matchType = '9slice_stretched';
+            breakdown = {
+              phash: hammingSim(qPhash, sPhash),
+              hsv: chiSquaredSim(qHsv, sHsv),
+              alpha: hammingSim(qAlpha, sAlpha),
+            };
+          }
+        } catch {
+          // stretch failed — keep native score
+        }
+      }
 
       if (sc >= threshold) {
         const result: Record<string, unknown> = {
           path: rel,
           score: Math.round(sc * 1000) / 1000,
           breakdown: {
-            phash: Math.round(hammingSim(qPhash, entry.phash) * 1000) / 1000,
-            hsv:   Math.round(chiSquaredSim(qHsv, entry.hsvHist) * 1000) / 1000,
-            alpha: Math.round(hammingSim(qAlpha, entry.alphaHash) * 1000) / 1000,
+            phash: Math.round(breakdown.phash * 1000) / 1000,
+            hsv:   Math.round(breakdown.hsv * 1000) / 1000,
+            alpha: Math.round(breakdown.alpha * 1000) / 1000,
           },
           dimensions: `${entry.width}×${entry.height}`,
         };
+        if (matchType === '9slice_stretched') result.match_type = '9slice_stretched';
+        if (entry.spriteBorder) result.spriteBorder = entry.spriteBorder;
         const cat = catalog[rel] || catalog[relative(projectRoot, join(projectRoot, rel))];
         if (cat) result.catalog = cat;
         results.push(result);
@@ -358,7 +475,7 @@ async function rebuildSpriteIndex(args: Record<string, unknown>): Promise<ToolRe
       try {
         const img = await Jimp.read(absPath);
         const { width, height } = img.bitmap;
-        sprites[rel] = {
+        const entry: SpriteEntry = {
           mtime,
           width,
           height,
@@ -367,6 +484,9 @@ async function rebuildSpriteIndex(args: Record<string, unknown>): Promise<ToolRe
           hsvHist:  await computeHsvHistogram(absPath),
           alphaHash: await computeAlphaHash(absPath),
         };
+        const border = readSpriteBorder(absPath);
+        if (border) entry.spriteBorder = border;
+        sprites[rel] = entry;
         const isNew = !prev;
         if (isNew) indexed++; else updated++;
       } catch (e) {
