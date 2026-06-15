@@ -199,7 +199,7 @@ export function createUtilityTools(connection: PhotoshopConnection): ToolDefinit
           'Each layer is scaled, isolated (siblings hidden), cropped to bounds, merged, trimmed, and saved. ' +
           'The document is restored to its original state after each export via history state undo. ' +
           'Supports clipping masks: when apply_clipping_mask is true, the clip base layer is composited with the target. ' +
-          'Results are written to /tmp/batch_export_results.txt (pipe-delimited: output_path|status|width|height). ' +
+          'Results are returned as structured JSON with per-layer status, dimensions, and errors. ' +
           'Use this instead of multiple photoshop_export_layer_as_png + photoshop_scale_layer + photoshop_undo calls — ' +
           'replaces 4N MCP calls with 1.',
         inputSchema: {
@@ -242,6 +242,13 @@ export function createUtilityTools(connection: PhotoshopConnection): ToolDefinit
                 },
                 required: ['path', 'output_path'],
               },
+            },
+            document_name: {
+              type: 'string',
+              description:
+                'Target document by name (e.g. "Beach buddies Popup.psd"). ' +
+                'Recommended in multi-document sessions — without it the export runs ' +
+                'against whatever document currently has focus.',
             },
           },
           required: ['layers'],
@@ -372,13 +379,31 @@ async function exportLayerAsPng(
       var srcLayer = app.activeDocument.activeLayer;
       var isClipped = false;
       try { isClipped = srcLayer.grouped; } catch(e) {}
-      return srcLayer.name + '|' + (isClipped ? '1' : '0');
+      return srcLayer.name + '|' + (isClipped ? '1' : '0') + '|' + app.activeDocument.name;
     `);
 
+    // Parse from the right — layer names may contain '|', doc name is last.
     const detStr = String(detection);
-    const sepIdx = detStr.lastIndexOf('|');
-    const layerName = detStr.substring(0, sepIdx);
-    const isClipped = detStr.substring(sepIdx + 1) === '1';
+    const docSep = detStr.lastIndexOf('|');
+    const origDocName = detStr.substring(docSep + 1).replace(/"/g, '\\"');
+    const rest = detStr.substring(0, docSep);
+    const sepIdx = rest.lastIndexOf('|');
+    const layerName = rest.substring(0, sepIdx);
+    const isClipped = rest.substring(sepIdx + 1) === '1';
+
+    // Unique temp doc names — lets every step resolve its document BY NAME
+    // instead of trusting app.activeDocument, which a user click between the
+    // sequential osascript invocations can silently change (the wrong-focus
+    // bug: step 4 would then trim/save/CLOSE whatever document had focus).
+    const dupDocName = `export_clip_tmp_${process.pid}`;
+    const pasteDocName = `clip_export_${process.pid}`;
+    const docByNameJs = `
+      function docByName(n) {
+        for (var di = 0; di < app.documents.length; di++)
+          if (app.documents[di].name === n) return app.documents[di];
+        return null;
+      }
+    `;
 
     if (applyClip && isClipped) {
       // ── CLIPPING MASK PATH (multi-step to avoid PS scripting engine crashes) ──
@@ -387,8 +412,10 @@ async function exportLayerAsPng(
 
       // Step 1: Duplicate doc, hide all, show target + clip base + ancestors
       await api.executeScript(`
-        var origDoc = app.activeDocument;
-        var dupDoc = origDoc.duplicate('export_clip_tmp');
+        ${docByNameJs}
+        var origDoc = docByName("${origDocName}");
+        if (!origDoc) throw new Error('Original document no longer open: ${origDocName}');
+        var dupDoc = origDoc.duplicate('${dupDocName}');
         app.activeDocument = dupDoc;
 
         function hideAll(layers) {
@@ -436,7 +463,10 @@ async function exportLayerAsPng(
 
       // Step 2: Copy Merged (composites visible layers respecting clip mask + shape)
       await api.executeScript(`
-        var dupDoc = app.activeDocument;
+        ${docByNameJs}
+        var dupDoc = docByName("${dupDocName}");
+        if (!dupDoc) throw new Error('Temp document vanished: ${dupDocName}');
+        app.activeDocument = dupDoc;
         dupDoc.selection.selectAll();
         dupDoc.selection.copy(true);
         return { copied: true };
@@ -444,21 +474,28 @@ async function exportLayerAsPng(
 
       // Step 3: Close dup doc, create new transparent doc, paste
       await api.executeScript(`
-        var dupDoc = app.activeDocument;
+        ${docByNameJs}
+        var dupDoc = docByName("${dupDocName}");
+        if (!dupDoc) throw new Error('Temp document vanished: ${dupDocName}');
         var ow = dupDoc.width;
         var oh = dupDoc.height;
         var ores = dupDoc.resolution;
         dupDoc.close(SaveOptions.DONOTSAVECHANGES);
 
-        var newDoc = app.documents.add(ow, oh, ores, 'clip_export', NewDocumentMode.RGB, DocumentFill.TRANSPARENT);
+        var newDoc = app.documents.add(ow, oh, ores, '${pasteDocName}', NewDocumentMode.RGB, DocumentFill.TRANSPARENT);
+        app.activeDocument = newDoc;
         newDoc.paste();
         try { newDoc.selection.deselect(); } catch(e) {}
         return { pasted: true };
       `);
 
-      // Step 4: Trim, save, close, return to original doc
+      // Step 4: Trim, save, close, return to original doc — all by name,
+      // never via app.activeDocument (user focus changes between scripts).
       const result = await api.executeScript(`
-        var newDoc = app.activeDocument;
+        ${docByNameJs}
+        var newDoc = docByName("${pasteDocName}");
+        if (!newDoc) throw new Error('Paste document vanished: ${pasteDocName}');
+        app.activeDocument = newDoc;
         ${trim ? `try { newDoc.trim(TrimType.TRANSPARENT, true, true, true, true); } catch(e) {}` : ''}
 
         var saveFile = new File("${outputPath}");
@@ -470,8 +507,8 @@ async function exportLayerAsPng(
         var h = Math.round(newDoc.height.as('px'));
         newDoc.close(SaveOptions.DONOTSAVECHANGES);
 
-        // Return to original document (first non-temp doc)
-        if (app.documents.length > 0) app.activeDocument = app.documents[0];
+        var origDoc = docByName("${origDocName}");
+        if (origDoc) app.activeDocument = origDoc;
 
         return {
           exported: true,
@@ -657,8 +694,17 @@ async function batchExportLayers(
     });
     const configArrayStr = '[' + configEntries.join(',') + ']';
 
+    const targetDocName = ((args.document_name as string) || '').replace(/"/g, '\\"');
     const result = await api.executeScript(`
       var doc = app.activeDocument;
+      if ("${targetDocName}") {
+        doc = null;
+        for (var di = 0; di < app.documents.length; di++) {
+          if (app.documents[di].name === "${targetDocName}") { doc = app.documents[di]; break; }
+        }
+        if (!doc) throw new Error('Document not open: ${targetDocName}');
+        app.activeDocument = doc;
+      }
       var CONFIGS = ${configArrayStr};
       var results = [];
 
@@ -734,13 +780,15 @@ async function batchExportLayers(
           doc.activeLayer = layer;
           var preState = doc.activeHistoryState;
 
+          // Isolate visibility BEFORE any resize — DOM transforms throw
+          // "User cancelled the operation" on hidden layers
+          isolateLayerPath(cfg.path);
+
           // Scale if needed
           if (cfg.scale_percent !== 100) {
+            layer.visible = true;
             layer.resize(cfg.scale_percent, cfg.scale_percent, AnchorPosition.MIDDLECENTER);
           }
-
-          // Isolate visibility
-          isolateLayerPath(cfg.path);
 
           // Clipping mask handling
           if (cfg.apply_clipping_mask) {

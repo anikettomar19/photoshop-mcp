@@ -88,7 +88,7 @@ async function getWorker(): Promise<Tesseract.Worker> {
   return _worker;
 }
 
-interface OcrResult {
+export interface OcrResult {
   text: string;
   confidence: number;
   words: Array<{ text: string; confidence: number }>;
@@ -108,6 +108,44 @@ async function runOcr(imageBuffer: Buffer): Promise<OcrResult> {
     confidence: data.confidence,
     words,
   };
+}
+
+/**
+ * OCR a file with preprocessing mode selection. Shared by the MCP tool
+ * handler and ocr-cli.js (subprocess access without MCP overhead).
+ */
+export async function ocrFile(
+  imagePath: string,
+  mode: string = 'auto',
+  brightnessThreshold: number = 200,
+  darknessThreshold: number = 80,
+): Promise<OcrResult> {
+  let bestResult: OcrResult = { text: '', confidence: 0, words: [] };
+
+  if (mode === 'bright' || mode === 'auto') {
+    const brightResult = await runOcr(await extractBrightPixels(imagePath, brightnessThreshold));
+    if (brightResult.confidence > bestResult.confidence) bestResult = brightResult;
+  }
+
+  if (mode === 'dark' || mode === 'auto') {
+    const darkResult = await runOcr(await extractDarkPixels(imagePath, darknessThreshold));
+    if (darkResult.confidence > bestResult.confidence) bestResult = darkResult;
+  }
+
+  if (mode === 'raw' || (mode === 'auto' && bestResult.confidence < 50)) {
+    const rawResult = await runOcr(readFileSync(imagePath));
+    if (rawResult.confidence > bestResult.confidence) bestResult = rawResult;
+  }
+
+  return bestResult;
+}
+
+/** Terminate the shared tesseract worker (CLI must call this or the process hangs). */
+export async function terminateOcrWorker(): Promise<void> {
+  if (_worker) {
+    await _worker.terminate();
+    _worker = null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -132,32 +170,7 @@ async function ocrImage(args: Record<string, unknown>): Promise<ToolResult> {
   const darknessThreshold = (args.darkness_threshold as number) || 80;
 
   try {
-    let bestResult: OcrResult = { text: '', confidence: 0, words: [] };
-
-    if (mode === 'bright' || mode === 'auto') {
-      const brightBuf = await extractBrightPixels(imagePath, brightnessThreshold);
-      const brightResult = await runOcr(brightBuf);
-      if (brightResult.confidence > bestResult.confidence) {
-        bestResult = brightResult;
-      }
-    }
-
-    if (mode === 'dark' || mode === 'auto') {
-      const darkBuf = await extractDarkPixels(imagePath, darknessThreshold);
-      const darkResult = await runOcr(darkBuf);
-      if (darkResult.confidence > bestResult.confidence) {
-        bestResult = darkResult;
-      }
-    }
-
-    if (mode === 'raw' || (mode === 'auto' && bestResult.confidence < 50)) {
-      // Try raw image without preprocessing
-      const rawBuf = readFileSync(imagePath);
-      const rawResult = await runOcr(rawBuf);
-      if (rawResult.confidence > bestResult.confidence) {
-        bestResult = rawResult;
-      }
-    }
+    const bestResult = await ocrFile(imagePath, mode, brightnessThreshold, darknessThreshold);
 
     return {
       content: [
