@@ -35,7 +35,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
-    "jimp": "^1.6.1"
+    "jimp": "^1.6.1",
+    "tesseract.js": "^7.0.0"
   },
   "mcpName": "io.github.anikettomar19/photoshop-mcp",
   "devDependencies": {

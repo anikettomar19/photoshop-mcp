@@ -24,6 +24,7 @@ import { createPsdTools } from '../tools/psd-tools.js';
 import { createUtilityTools } from '../tools/utility-tools.js';
 import { createLayerEffectsTools } from '../tools/layer-effects-tools.js';
 import { createSpriteTools } from '../tools/sprite-tools.js';
+import { createOcrTools } from '../tools/ocr-tools.js';
 
 export class PhotoshopMCPServer {
   private server: Server;
@@ -166,6 +167,13 @@ export class PhotoshopMCPServer {
     // Requires UNITY_PROJECT_ROOT env var set in .mcp.json for the project
     const spriteTools = createSpriteTools();
     spriteTools.forEach((tool) => {
+      this.toolRegistry.register(tool.tool.name, tool);
+    });
+
+    // OCR tools — no Photoshop session required (pure file I/O)
+    // Uses tesseract.js (bundled, no system install needed)
+    const ocrTools = createOcrTools();
+    ocrTools.forEach((tool) => {
       this.toolRegistry.register(tool.tool.name, tool);
     });
 

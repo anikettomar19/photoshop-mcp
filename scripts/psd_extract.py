@@ -260,14 +260,55 @@ def extract_layer_tree(psd, group_path):
         return None
 
     def get_solidfill_color(layer):
+        tb = layer.tagged_blocks
+        # Source 1: SOLID_COLOR_SHEET_SETTING (standard shape fill)
         try:
-            if Tag.VECTOR_STROKE_CONTENT_DATA in layer.tagged_blocks:
-                data = layer.tagged_blocks[Tag.VECTOR_STROKE_CONTENT_DATA].data
+            data = tb.get_data(Tag.SOLID_COLOR_SHEET_SETTING)
+            if data:
                 clr = data[b'Clr ']
                 return {"r": round(float(clr[b'Rd  '])), "g": round(float(clr[b'Grn '])), "b": round(float(clr[b'Bl  '])), "a": 255}
         except (AttributeError, KeyError, TypeError):
             pass
+        # Source 2: VECTOR_STROKE_CONTENT_DATA (fill when stroke settings present)
+        try:
+            if Tag.VECTOR_STROKE_CONTENT_DATA in tb:
+                data = tb[Tag.VECTOR_STROKE_CONTENT_DATA].data
+                clr = data[b'Clr ']
+                return {"r": round(float(clr[b'Rd  '])), "g": round(float(clr[b'Grn '])), "b": round(float(clr[b'Bl  '])), "a": 255}
+        except (AttributeError, KeyError, TypeError):
+            pass
+        # Source 3: GRADIENT_FILL_SETTING (first color stop)
+        try:
+            data = tb.get_data(Tag.GRADIENT_FILL_SETTING)
+            if data:
+                grad = data.get(b'Grad', data)
+                if b'Clrs' in grad and len(grad[b'Clrs']) > 0:
+                    clr = grad[b'Clrs'][0][b'Clr ']
+                    return {"r": round(float(clr[b'Rd  '])), "g": round(float(clr[b'Grn '])), "b": round(float(clr[b'Bl  '])), "a": 255}
+        except (AttributeError, KeyError, TypeError):
+            pass
         return None
+
+    def get_corner_radius(layer):
+        try:
+            if not hasattr(layer, 'origination') or not layer.origination:
+                return None
+            orig = layer.origination[0]
+            if type(orig).__name__ == 'Invalidated':
+                return None
+            if hasattr(orig, 'radii') and orig.radii:
+                vals = []
+                for k, v in orig.radii.items():
+                    if k == b'unitValueQuadVersion':
+                        continue
+                    try:
+                        vals.append(float(v))
+                    except (TypeError, ValueError):
+                        pass
+                return round(sum(vals) / len(vals), 2) if vals else 0
+            return 0
+        except (AttributeError, KeyError, TypeError, IndexError):
+            return None
 
     def get_text_data(layer):
         try:
@@ -331,7 +372,8 @@ def extract_layer_tree(psd, group_path):
                 "has_clip_mask": getattr(layer._record, 'clipping', 0) == 1 if hasattr(layer, '_record') else False,
                 "export_needed": is_so or (is_pixel and bounds["width"] > 0),
                 "button_text": None,
-                "solidfill_color": get_solidfill_color(layer) if is_fill else None
+                "solidfill_color": get_solidfill_color(layer) if is_fill else None,
+                "corner_radius": get_corner_radius(layer) if is_fill else None
             }
 
             if is_text:
