@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'fs';
+import { createHash } from 'crypto';
 import { Jimp } from 'jimp';
 
 // ---------------------------------------------------------------------------
@@ -26,6 +27,17 @@ export interface SpriteHashes {
   phash: number[];
   hsvHist: number[];
   alphaHash: number[];
+  contentHash: string;
+}
+
+/**
+ * Exact-identity hash: SHA-1 over the raw decoded RGBA bytes. Two sprites share
+ * this ONLY if every pixel matches — the correct key for dedup. (pHash is
+ * perceptual and false-merges same-shape / different-detail art, e.g. a blue tab
+ * vs a red tab, or "GG" vs "KW" tags.)
+ */
+export function computeContentHash(img: JimpImage): string {
+  return createHash('sha1').update(Buffer.from(img.bitmap.data)).digest('hex');
 }
 
 /**
@@ -194,6 +206,7 @@ export async function hashImageFile(absPath: string): Promise<SpriteHashes> {
     phash: computePhash(img),
     hsvHist: computeHsvHistogram(img),
     alphaHash: computeAlphaHash(img),
+    contentHash: computeContentHash(img),
   };
 }
 

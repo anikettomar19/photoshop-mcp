@@ -2,7 +2,7 @@ import { parentPort, workerData } from 'worker_threads';
 import { Jimp } from 'jimp';
 import {
   computePhash, computeHsvHistogram, computeAlphaHash,
-  computeNineSliceGeom, readSpriteBorder,
+  computeContentHash, computeNineSliceGeom, readSpriteBorder,
 } from './sprite-hash.js';
 
 // ---------------------------------------------------------------------------
@@ -39,6 +39,7 @@ for (const job of jobs) {
       phash: computePhash(img),
       hsvHist: computeHsvHistogram(img),
       alphaHash: computeAlphaHash(img),
+      contentHash: computeContentHash(img),
     };
     const border = readSpriteBorder(job.absPath);
     if (border) {
