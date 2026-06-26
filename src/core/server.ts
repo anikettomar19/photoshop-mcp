@@ -1,3 +1,8 @@
+// We use the low-level Server (not McpServer) intentionally: our custom ToolRegistry
+// uses JSON Schema definitions and requires direct control over ListToolsRequestSchema /
+// CallToolRequestSchema handlers. McpServer's Zod-based API does not support this
+// without a full registry rewrite. See SDK docs: "Only use Server for advanced use cases."
+// eslint-disable-next-line @typescript-eslint/no-deprecated
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -25,6 +30,7 @@ import { createUtilityTools } from '../tools/utility-tools.js';
 import { createLayerEffectsTools } from '../tools/layer-effects-tools.js';
 import { createSpriteTools } from '../tools/sprite-tools.js';
 import { createOcrTools } from '../tools/ocr-tools.js';
+import { createSmartObjectTools } from '../tools/smart-object-tools.js';
 
 export class PhotoshopMCPServer {
   private server: Server;
@@ -174,6 +180,11 @@ export class PhotoshopMCPServer {
     // Uses tesseract.js (bundled, no system install needed)
     const ocrTools = createOcrTools();
     ocrTools.forEach((tool) => {
+      this.toolRegistry.register(tool.tool.name, tool);
+    });
+
+    const smartObjectTools = createSmartObjectTools(connection);
+    smartObjectTools.forEach((tool) => {
       this.toolRegistry.register(tool.tool.name, tool);
     });
 
