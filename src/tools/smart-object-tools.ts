@@ -113,7 +113,7 @@ function scriptListSmartObjects(): string {
   `;
 }
 
-function scriptReplaceSmartObject(
+export function scriptReplaceSmartObject(
   layerPath: string,
   newFilePath: string,
   fitToLayer: boolean,

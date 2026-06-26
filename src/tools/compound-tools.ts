@@ -14,6 +14,7 @@ import {
   getProjectPaths,
 } from './sprite-tools.js';
 import { batchExportLayers } from './utility-tools.js';
+import { scriptReplaceSmartObject } from './smart-object-tools.js';
 
 // ── ExtendScript helpers ──────────────────────────────────────────────────────
 
@@ -425,6 +426,106 @@ async function prepUiForUnity(
   }
 }
 
+// ── Tool: swap_mockup_asset ───────────────────────────────────────────────────
+
+async function swapMockupAsset(
+  connection: PhotoshopConnection,
+  args: Record<string, unknown>
+): Promise<ToolResult> {
+  const smartObjectPath = args.smartObjectPath as string;
+  const newAssetPath    = args.newAssetPath as string;
+  const fitToLayer      = (args.fitToLayer  as boolean | undefined) ?? true;
+  const saveAfter       = (args.saveAfter   as boolean | undefined) ?? false;
+  const exportPreviewPath = args.exportPreviewPath as string | undefined;
+  const documentName    = (args.documentName as string | undefined) ?? '';
+
+  try {
+    const api = await new PhotoshopAPIFactory(connection).createAPI();
+
+    // ── 1. Switch to target document if specified ─────────────────────────────
+    if (documentName) {
+      await api.executeScript(`
+        var n = "${documentName.replace(/"/g, '\\"')}";
+        for (var i = 0; i < app.documents.length; i++) {
+          if (app.documents[i].name === n) { app.activeDocument = app.documents[i]; break; }
+        }
+      `);
+    }
+
+    // ── 2. Replace smart object content ──────────────────────────────────────
+    const replaceScript = scriptReplaceSmartObject(smartObjectPath, newAssetPath, fitToLayer, saveAfter);
+    const replaceResult = (await api.executeScript(replaceScript)) as {
+      replaced: boolean;
+      layerName: string;       // NEW name Photoshop assigned (matches the asset filename)
+      layerPath: string;
+      fitApplied: boolean;
+      saved: boolean;
+      originalBounds: { left: number; top: number; right: number; bottom: number; width: number; height: number };
+      finalBounds:    { left: number; top: number; right: number; bottom: number; width: number; height: number };
+    };
+
+    // ── 3. Export preview PNG (optional) ─────────────────────────────────────
+    // After replacement Photoshop renames the layer to the new file's basename.
+    // Reconstruct the updated path so batchExportLayers can find it.
+    let previewResult: { exportedPath: string; width: number; height: number } | null = null;
+    if (exportPreviewPath) {
+      mkdirSync(dirname(exportPreviewPath), { recursive: true });
+
+      const pathSegments = smartObjectPath.split('/');
+      pathSegments[pathSegments.length - 1] = replaceResult.layerName;
+      const updatedPath = pathSegments.join('/');
+
+      const batchResult = await batchExportLayers(connection, {
+        layers: [{ path: updatedPath, output_path: exportPreviewPath, scale_percent: 100, trim: false, apply_clipping_mask: false }],
+        document_name: documentName || undefined,
+      });
+
+      if (!batchResult.isError) {
+        try {
+          const batchData = JSON.parse((batchResult.content[0] as any).text);
+          const layerResult = batchData?.results?.[0];
+          if (layerResult?.status === 'OK') {
+            previewResult = { exportedPath: exportPreviewPath, width: layerResult.width, height: layerResult.height };
+          }
+        } catch { /* non-fatal */ }
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(
+            {
+              success: true,
+              smartObjectPath,
+              newAssetPath,
+              newLayerName: replaceResult.layerName,
+              fitApplied: replaceResult.fitApplied,
+              saved: replaceResult.saved,
+              originalBounds: replaceResult.originalBounds,
+              finalBounds: replaceResult.finalBounds,
+              preview: previewResult,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error in swap_mockup_asset: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
+  }
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 export function createCompoundTools(connection: PhotoshopConnection): ToolDefinition[] {
@@ -546,6 +647,59 @@ export function createCompoundTools(connection: PhotoshopConnection): ToolDefini
         },
       },
       handler: async (args) => prepUiForUnity(connection, args),
+    },
+    {
+      tool: {
+        name: 'photoshop_swap_mockup_asset',
+        description:
+          'Compound tool: replace a smart object\'s content with a new asset and optionally ' +
+          'export a preview PNG — all in one call. ' +
+          'Replaces the 3-step sequence of list_smart_objects → replace_smart_object → batch_export_layers. ' +
+          'Use this for the common TechArt workflow: "swap this icon/texture into the mockup and show me the result." ' +
+          'Note: Photoshop renames the layer to the new asset\'s filename after replacement — ' +
+          'this is expected behavior, not a bug. The new layer name is returned in the result.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            smartObjectPath: {
+              type: 'string',
+              description:
+                'Slash-separated path to the smart object layer, e.g. "UI/Card/Artwork". ' +
+                'Use photoshop_list_smart_objects first to find the current path.',
+            },
+            newAssetPath: {
+              type: 'string',
+              description: 'Absolute path to the replacement image file (PNG, JPG, PSD, etc.).',
+            },
+            fitToLayer: {
+              type: 'boolean',
+              description:
+                'Scale the new content to fit within the original layer bounds after replacement ' +
+                '(aspect ratio preserved, ~10-15px precision). Default: true.',
+              default: true,
+            },
+            exportPreviewPath: {
+              type: 'string',
+              description:
+                'If set, exports the swapped layer as a PNG to this absolute path for review. ' +
+                'Parent directories are created automatically. Omit to skip the export step.',
+            },
+            saveAfter: {
+              type: 'boolean',
+              description: 'Save the document after replacement. Default: false.',
+              default: false,
+            },
+            documentName: {
+              type: 'string',
+              description:
+                'Target document by name, e.g. "Info Screen.psd". ' +
+                'Recommended in multi-document sessions.',
+            },
+          },
+          required: ['smartObjectPath', 'newAssetPath'],
+        },
+      },
+      handler: async (args) => swapMockupAsset(connection, args),
     },
   ];
 }
