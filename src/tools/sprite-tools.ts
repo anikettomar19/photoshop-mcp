@@ -180,7 +180,7 @@ export function cacheDirFor(projectRoot: string): string {
   return join(homedir(), '.cache', 'photoshop-mcp', key);
 }
 
-function getProjectPaths(args: Record<string, unknown>) {
+export function getProjectPaths(args: Record<string, unknown>) {
   const projectRoot =
     (args.project_root as string | undefined) || process.env.UNITY_PROJECT_ROOT;
   if (!projectRoot) {
@@ -207,7 +207,7 @@ export function loadIndex(indexPath: string): Record<string, SpriteEntry> {
   }
 }
 
-function saveIndex(indexPath: string, sprites: Record<string, SpriteEntry>): void {
+export function saveIndex(indexPath: string, sprites: Record<string, SpriteEntry>): void {
   mkdirSync(join(indexPath, '..'), { recursive: true });
   const data: IndexFile = { version: 1, indexedAt: new Date().toISOString(), sprites };
   writeFileSync(indexPath, JSON.stringify(data));
@@ -276,7 +276,7 @@ function writeNineSliceIndex(indexPath: string, sprites: NineSliceEntry[]): void
   writeFileSync(indexPath, JSON.stringify({ version: 2, sprites }, null, 2));
 }
 
-function loadCatalog(catalogPath: string): Record<string, CatalogEntry> {
+export function loadCatalog(catalogPath: string): Record<string, CatalogEntry> {
   if (!existsSync(catalogPath)) return {};
   try {
     return (JSON.parse(readFileSync(catalogPath, 'utf8')) as CatalogFile).sprites ?? {};
@@ -285,7 +285,7 @@ function loadCatalog(catalogPath: string): Record<string, CatalogEntry> {
   }
 }
 
-function saveCatalog(catalogPath: string, sprites: Record<string, CatalogEntry>): void {
+export function saveCatalog(catalogPath: string, sprites: Record<string, CatalogEntry>): void {
   mkdirSync(join(catalogPath, '..'), { recursive: true });
   writeFileSync(catalogPath, JSON.stringify({ version: 1, sprites }, null, 2));
 }

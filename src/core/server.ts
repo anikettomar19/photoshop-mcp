@@ -31,6 +31,7 @@ import { createLayerEffectsTools } from '../tools/layer-effects-tools.js';
 import { createSpriteTools } from '../tools/sprite-tools.js';
 import { createOcrTools } from '../tools/ocr-tools.js';
 import { createSmartObjectTools } from '../tools/smart-object-tools.js';
+import { createCompoundTools } from '../tools/compound-tools.js';
 
 export class PhotoshopMCPServer {
   private server: Server;
@@ -185,6 +186,11 @@ export class PhotoshopMCPServer {
 
     const smartObjectTools = createSmartObjectTools(connection);
     smartObjectTools.forEach((tool) => {
+      this.toolRegistry.register(tool.tool.name, tool);
+    });
+
+    const compoundTools = createCompoundTools(connection);
+    compoundTools.forEach((tool) => {
       this.toolRegistry.register(tool.tool.name, tool);
     });
 
