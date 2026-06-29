@@ -329,7 +329,17 @@ export async function searchSimilarSprites(
     // the aspect gate but could 9-slice-stretch to the query size are queued
     // for pass 2 instead of being stretched inline — stretching every bordered
     // candidate cost 5-15s per query.
+    const staleKeys: string[] = [];
     for (const [rel, entry] of Object.entries(index)) {
+      // Deletion guard: the index can lag behind disk when a sprite is deleted or
+      // moved without a rebuild (PABLO skips rebuild_sprite_index when no new sprites
+      // were imported). Never return a match for a file that no longer exists — a
+      // ghost match produced a valid-looking hit whose .meta GUID was gone downstream.
+      // Collect the dead keys and self-heal the index after the pass.
+      if (!existsSync(join(projectRoot, rel))) {
+        staleKeys.push(rel);
+        continue;
+      }
       const aspectDiff = Math.abs(entry.aspectRatio - qAspect) / Math.max(qAspect, 0.01);
 
       if (aspectDiff > 0.25) {
@@ -358,6 +368,13 @@ export async function searchSimilarSprites(
           _spriteBorder: entry.spriteBorder,
         });
       }
+    }
+
+    // Self-heal: drop entries whose files vanished so subsequent queries are clean
+    // and the on-disk index converges toward disk without waiting for a full rebuild.
+    if (staleKeys.length > 0) {
+      for (const k of staleKeys) delete index[k];
+      saveIndex(indexPath, index);
     }
 
     // Pass 2: 9-slice stretch only the top HSV-prefiltered candidates.
