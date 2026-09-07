@@ -111,64 +111,96 @@ async function getLayerEffects(connection: PhotoshopConnection): Promise<ToolRes
 
       var fx = desc.getObjectValue(sTID('layerEffects'));
 
-      // Drop Shadow
-      if (fx.hasKey(sTID('dropShadow'))) {
-        var ds = fx.getObjectValue(sTID('dropShadow'));
-        out.effects.dropShadow = {
-          enabled:  safeGet(function(){ return ds.getBoolean(sTID('enabled')); }),
-          opacity:  safeGet(function(){ return ds.getDouble(cTID('Opct')); }),
-          angle:    safeGet(function(){ return ds.getDouble(cTID('uglA')); }),
-          distance: safeGet(function(){ return ds.getDouble(cTID('Dstn')); }),
-          size:     safeGet(function(){ return ds.getDouble(cTID('blur')); }),
-          spread:   safeGet(function(){ return ds.getDouble(cTID('uglC')); }),
-          color:    safeGet(function(){ return colorFromDesc(ds.getObjectValue(sTID('color'))); })
+      // Friendly names for the raw Photoshop keys. Anything not listed is reported
+      // under its raw key, so a new/unknown effect type can never be silently dropped.
+      var ALIAS = {
+        dropShadow: 'dropShadow', frameFX: 'stroke', innerGlow: 'innerGlow',
+        outerGlow: 'outerGlow', solidFill: 'colorOverlay', gradientFill: 'gradientOverlay',
+        innerShadow: 'innerShadow', bevelEmboss: 'bevelEmboss', chromeFX: 'satin',
+        patternFill: 'patternOverlay'
+      };
+
+      function readEffect(o) {
+        var e = {
+          enabled:   safeGet(function(){ return o.getBoolean(sTID('enabled')); }),
+          present:   safeGet(function(){ return o.getBoolean(sTID('present')); }),
+          opacity:   safeGet(function(){ return o.getDouble(cTID('Opct')); }),
+          blendMode: safeGet(function(){ return String(o.getEnumerationValue(sTID('mode'))); }),
+          color:     safeGet(function(){ return colorFromDesc(o.getObjectValue(sTID('color'))); }),
+          angle:     safeGet(function(){ return o.getDouble(cTID('lagl')); }),
+          distance:  safeGet(function(){ return o.getDouble(cTID('Dstn')); }),
+          size:      safeGet(function(){ return o.getDouble(cTID('blur')); }),
+          choke:     safeGet(function(){ return o.getDouble(cTID('Ckmt')); }),
+          spread:    safeGet(function(){ return o.getDouble(cTID('uglC')); }),
+          position:  safeGet(function(){ return String(o.getEnumerationValue(sTID('frameFXType'))); }),
+          gradientAngle: safeGet(function(){ return o.getDouble(cTID('Angl')); }),
+          gradientType:  safeGet(function(){ return String(o.getEnumerationValue(sTID('type'))); }),
+          gradientScale: safeGet(function(){ return o.getDouble(cTID('Scl ')); }),
+          reverse:       safeGet(function(){ return o.getBoolean(sTID('reverse')); })
         };
+        e.stops = safeGet(function(){
+          var g = o.getObjectValue(sTID('gradient'));
+          var cl = g.getList(sTID('colors'));
+          var arr = [];
+          for (var s = 0; s < cl.count; s++) {
+            var stp = cl.getObjectValue(s);
+            arr.push({
+              location: safeGet(function(){ return stp.getInteger(sTID('location')); }),
+              color:    safeGet(function(){ return colorFromDesc(stp.getObjectValue(sTID('color'))); })
+            });
+          }
+          return arr;
+        });
+        var clean = {};
+        for (var k in e) { if (e[k] !== null && e[k] !== undefined) clean[k] = e[k]; }
+        return clean;
       }
 
-      // Stroke (frameFX)
-      if (fx.hasKey(sTID('frameFX'))) {
-        var st = fx.getObjectValue(sTID('frameFX'));
-        out.effects.stroke = {
-          enabled:  safeGet(function(){ return st.getBoolean(sTID('enabled')); }),
-          size:     safeGet(function(){ return st.getDouble(cTID('Sz  ')); }),
-          opacity:  safeGet(function(){ return st.getDouble(cTID('Opct')); }),
-          position: safeGet(function(){
-            return String(st.getEnumerationValue(sTID('frameFXType')));
-          }),
-          color:    safeGet(function(){ return colorFromDesc(st.getObjectValue(sTID('color'))); })
-        };
+      function readKey(key) {
+        var asList = safeGet(function(){ return fx.getList(key); });
+        if (asList) {
+          var arr = [];
+          for (var j = 0; j < asList.count; j++) arr.push(readEffect(asList.getObjectValue(j)));
+          return arr.length === 1 ? arr[0] : arr;
+        }
+        var single = safeGet(function(){ return fx.getObjectValue(key); });
+        return single ? readEffect(single) : null;
       }
 
-      // Inner Glow
-      if (fx.hasKey(sTID('innerGlow'))) {
-        var ig = fx.getObjectValue(sTID('innerGlow'));
-        out.effects.innerGlow = {
-          enabled: safeGet(function(){ return ig.getBoolean(sTID('enabled')); }),
-          opacity: safeGet(function(){ return ig.getDouble(cTID('Opct')); }),
-          size:    safeGet(function(){ return ig.getDouble(cTID('blur')); }),
-          color:   safeGet(function(){ return colorFromDesc(ig.getObjectValue(sTID('color'))); })
-        };
+      // rawKeys records exactly what Photoshop reported, so a caller can tell the
+      // difference between "no such effect" and "this reader did not look for it".
+      out.rawKeys = [];
+      var multiKeys = [], singleKeys = [];
+      for (var i = 0; i < fx.count; i++) {
+        var k = fx.getKey(i);
+        var id = typeIDToStringID(k);
+        out.rawKeys.push(id);
+        if (id === 'scale') continue;   // document FX scale, not an effect
+        if (id.length > 5 && id.substring(id.length - 5) === 'Multi') multiKeys.push([k, id]);
+        else singleKeys.push([k, id]);
+      }
+      // singular first, then Multi overwrites — Photoshop treats the Multi list as authoritative
+      for (var a = 0; a < singleKeys.length; a++) {
+        var nm = ALIAS[singleKeys[a][1]] || singleKeys[a][1];
+        var v1 = readKey(singleKeys[a][0]);
+        if (v1) out.effects[nm] = v1;
+      }
+      for (var b = 0; b < multiKeys.length; b++) {
+        var base = multiKeys[b][1].substring(0, multiKeys[b][1].length - 5);
+        var nm2 = ALIAS[base] || base;
+        var v2 = readKey(multiKeys[b][0]);
+        if (v2) out.effects[nm2] = v2;
       }
 
-      // Outer Glow
-      if (fx.hasKey(sTID('outerGlow'))) {
-        var og = fx.getObjectValue(sTID('outerGlow'));
-        out.effects.outerGlow = {
-          enabled: safeGet(function(){ return og.getBoolean(sTID('enabled')); }),
-          opacity: safeGet(function(){ return og.getDouble(cTID('Opct')); }),
-          size:    safeGet(function(){ return og.getDouble(cTID('blur')); }),
-          color:   safeGet(function(){ return colorFromDesc(og.getObjectValue(sTID('color'))); })
-        };
-      }
-
-      // Color Overlay
-      if (fx.hasKey(sTID('solidFill'))) {
-        var co = fx.getObjectValue(sTID('solidFill'));
-        out.effects.colorOverlay = {
-          enabled: safeGet(function(){ return co.getBoolean(sTID('enabled')); }),
-          opacity: safeGet(function(){ return co.getDouble(cTID('Opct')); }),
-          color:   safeGet(function(){ return colorFromDesc(co.getObjectValue(sTID('color'))); })
-        };
+      // Explicit summary of what is actually switched ON — the question callers really ask.
+      out.enabledEffects = [];
+      for (var n in out.effects) {
+        var v = out.effects[n];
+        if (v && typeof v.length === 'number') {
+          for (var q = 0; q < v.length; q++) if (v[q] && v[q].enabled) out.enabledEffects.push(n + '[' + q + ']');
+        } else if (v && v.enabled) {
+          out.enabledEffects.push(n);
+        }
       }
 
       return out;

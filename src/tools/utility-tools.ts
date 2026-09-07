@@ -661,7 +661,7 @@ async function clearGuides(connection: PhotoshopConnection): Promise<ToolResult>
   }
 }
 
-async function batchExportLayers(
+export async function batchExportLayers(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
