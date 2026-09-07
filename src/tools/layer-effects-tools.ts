@@ -79,6 +79,7 @@ export function createLayerEffectsTools(connection: PhotoshopConnection): ToolDe
 const amHelpers = `
 function cTID(s) { return app.charIDToTypeID(s); }
 function sTID(s) { return app.stringIDToTypeID(s); }
+function tSID(id) { return app.typeIDToStringID(id); }
 function safeGet(fn) { try { return fn(); } catch(e) { return null; } }
 function colorFromDesc(d) {
   return {
@@ -125,16 +126,16 @@ async function getLayerEffects(connection: PhotoshopConnection): Promise<ToolRes
           enabled:   safeGet(function(){ return o.getBoolean(sTID('enabled')); }),
           present:   safeGet(function(){ return o.getBoolean(sTID('present')); }),
           opacity:   safeGet(function(){ return o.getDouble(cTID('Opct')); }),
-          blendMode: safeGet(function(){ return String(o.getEnumerationValue(sTID('mode'))); }),
+          blendMode: safeGet(function(){ return tSID(o.getEnumerationValue(sTID('mode'))); }),
           color:     safeGet(function(){ return colorFromDesc(o.getObjectValue(sTID('color'))); }),
           angle:     safeGet(function(){ return o.getDouble(cTID('lagl')); }),
           distance:  safeGet(function(){ return o.getDouble(cTID('Dstn')); }),
           size:      safeGet(function(){ return o.getDouble(cTID('blur')); }),
           choke:     safeGet(function(){ return o.getDouble(cTID('Ckmt')); }),
           spread:    safeGet(function(){ return o.getDouble(cTID('uglC')); }),
-          position:  safeGet(function(){ return String(o.getEnumerationValue(sTID('frameFXType'))); }),
+          position:  safeGet(function(){ return tSID(o.getEnumerationValue(sTID('frameFXType'))); }),
           gradientAngle: safeGet(function(){ return o.getDouble(cTID('Angl')); }),
-          gradientType:  safeGet(function(){ return String(o.getEnumerationValue(sTID('type'))); }),
+          gradientType:  safeGet(function(){ return tSID(o.getEnumerationValue(sTID('type'))); }),
           gradientScale: safeGet(function(){ return o.getDouble(cTID('Scl ')); }),
           reverse:       safeGet(function(){ return o.getBoolean(sTID('reverse')); })
         };
