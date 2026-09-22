@@ -2,6 +2,7 @@ import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { ExtendScriptSnippets } from '../api/extendscript.js';
+import { requireString } from '../utils/args.js';
 
 export function createImagePlacementTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -56,7 +57,7 @@ async function placeImage(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const filePath = args.filePath as string;
+  const filePath = requireString(args, 'filePath');
   const x = (args.x as number) || 0;
   const y = (args.y as number) || 0;
 
@@ -92,7 +93,7 @@ async function openImage(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const filePath = args.filePath as string;
+  const filePath = requireString(args, 'filePath');
 
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);

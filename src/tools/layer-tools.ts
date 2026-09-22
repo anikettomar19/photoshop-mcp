@@ -2,6 +2,7 @@ import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { ExtendScriptSnippets } from '../api/extendscript.js';
+import { requireString } from '../utils/args.js';
 
 export function createLayerTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -226,7 +227,7 @@ async function createTextLayer(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const text = args.text as string;
+  const text = requireString(args, 'text', { allowEmpty: true });
   const x = (args.x as number) || 100;
   const y = (args.y as number) || 100;
   const fontSize = (args.fontSize as number) || 24;
@@ -357,7 +358,7 @@ async function selectLayerByPath(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const path = args.path as string;
+  const path = requireString(args, 'path');
 
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);

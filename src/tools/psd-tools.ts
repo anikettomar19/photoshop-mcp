@@ -2,6 +2,7 @@ import { ToolDefinition } from '../core/tool-registry.js';
 import { spawn, spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import { requireString } from '../utils/args.js';
 
 // Pick the Python interpreter that has psd-tools + Pillow installed
 function detectPython(): string {
@@ -77,8 +78,8 @@ export function createPsdTools(): ToolDefinition[] {
         },
       },
       handler: async (args) => {
-        const psdPath = args['psd_path'] as string;
-        const layerPath = args['layer_path'] as string;
+        const psdPath = requireString(args, 'psd_path');
+        const layerPath = requireString(args, 'layer_path');
         const outputPath = (args['output_path'] as string | undefined) ?? '/tmp/extracted_layer.png';
 
         try {
@@ -115,8 +116,8 @@ export function createPsdTools(): ToolDefinition[] {
         },
       },
       handler: async (args) => {
-        const psdPath = args['psd_path'] as string;
-        const layerPath = args['layer_path'] as string;
+        const psdPath = requireString(args, 'psd_path');
+        const layerPath = requireString(args, 'layer_path');
 
         try {
           const output = await runPython([psdPath, '--fx', layerPath]);
@@ -152,8 +153,8 @@ export function createPsdTools(): ToolDefinition[] {
         },
       },
       handler: async (args) => {
-        const psdPath = args['psd_path'] as string;
-        const groupPath = args['group_path'] as string;
+        const psdPath = requireString(args, 'psd_path');
+        const groupPath = requireString(args, 'group_path');
 
         try {
           const output = await runPython([psdPath, '--layer-tree', groupPath]);

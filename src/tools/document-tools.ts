@@ -2,6 +2,7 @@ import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { ExtendScriptSnippets } from '../api/extendscript.js';
+import { requireString } from '../utils/args.js';
 
 export function createDocumentTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -182,7 +183,7 @@ async function saveDocument(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const path = args.path as string;
+  const path = requireString(args, 'path');
   const format = (args.format as string) || 'PSD';
   const quality = (args.quality as number) || 8;
 
