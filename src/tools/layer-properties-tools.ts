@@ -1,6 +1,7 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
+import { requireString } from '../utils/args.js';
 import { ExtendScriptSnippets } from '../api/extendscript.js';
 
 export function createLayerPropertiesTools(connection: PhotoshopConnection): ToolDefinition[] {
@@ -211,7 +212,7 @@ async function setLayerBlendMode(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const blendMode = args.blendMode as string;
+  const blendMode = requireString(args, 'blendMode');
 
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);
@@ -313,7 +314,7 @@ async function renameLayer(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const name = args.name as string;
+  const name = requireString(args, 'name');
 
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);

@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { Jimp } from 'jimp';
 import Tesseract from 'tesseract.js';
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
+import { requireString } from '../utils/args.js';
 
 // ---------------------------------------------------------------------------
 // Preprocessing helpers
@@ -153,10 +154,7 @@ export async function terminateOcrWorker(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function ocrImage(args: Record<string, unknown>): Promise<ToolResult> {
-  const imagePath = args.image_path as string;
-  if (!imagePath) {
-    return { content: [{ type: 'text', text: 'Error: image_path is required' }], isError: true };
-  }
+  const imagePath = requireString(args, 'image_path');
 
   // Verify file exists
   try {

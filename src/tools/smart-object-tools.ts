@@ -1,6 +1,7 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
+import { requireString } from '../utils/args.js';
 
 export function createSmartObjectTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -281,8 +282,8 @@ async function replaceSmartObject(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const layerPath = args.layerPath as string;
-  const newFilePath = args.newFilePath as string;
+  const layerPath = requireString(args, 'layerPath');
+  const newFilePath = requireString(args, 'newFilePath');
   const fitToLayer = (args.fitToLayer as boolean) ?? false;
   const saveAfter = (args.saveAfter as boolean) ?? false;
 

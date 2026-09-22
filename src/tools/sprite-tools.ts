@@ -6,6 +6,7 @@ import { Worker } from 'worker_threads';
 import { Jimp } from 'jimp';
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { computePhash, computeHsvHistogram, computeAlphaHash, computeNineSliceGeom, readSpriteBorder } from './sprite-hash.js';
+import { requireString } from '../utils/args.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -446,7 +447,7 @@ export async function searchSimilarSprites(
 async function findSimilarSprites(args: Record<string, unknown>): Promise<ToolResult> {
   const topN      = (args.top_n     as number | undefined) ?? 5;
   const threshold = (args.threshold as number | undefined) ?? 0.5;
-  const queryPath = args.image_path as string;
+  const queryPath = requireString(args, 'image_path');
 
   try {
     const { projectRoot } = getProjectPaths(args);
@@ -597,8 +598,8 @@ async function catalogSearch(args: Record<string, unknown>): Promise<ToolResult>
 }
 
 async function catalogTag(args: Record<string, unknown>): Promise<ToolResult> {
-  const spritePath = args.sprite_path as string;
-  const intent     = args.intent      as string;
+  const spritePath = requireString(args, 'sprite_path');
+  const intent     = requireString(args, 'intent');
   const theme      = (args.theme    as string | undefined) ?? '';
   const notes      = (args.notes    as string | undefined) ?? '';
   const usedInRaw  = (args.used_in  as string | undefined) ?? '';

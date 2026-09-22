@@ -2,6 +2,7 @@ import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { ExtendScriptSnippets } from '../api/extendscript.js';
+import { requireString } from '../utils/args.js';
 
 export function createTextTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -100,7 +101,7 @@ async function setTextFont(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const fontName = args.fontName as string;
+  const fontName = requireString(args, 'fontName');
   const fontSize = args.fontSize as number | undefined;
 
   try {
@@ -171,7 +172,7 @@ async function setTextAlignment(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const alignment = args.alignment as string;
+  const alignment = requireString(args, 'alignment');
 
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);
@@ -205,7 +206,7 @@ async function updateTextContent(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const text = args.text as string;
+  const text = requireString(args, 'text');
 
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);

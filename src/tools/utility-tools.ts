@@ -1,6 +1,7 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
+import { requireString } from '../utils/args.js';
 
 export function createUtilityTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -366,7 +367,7 @@ async function exportLayerAsPng(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const outputPath = (args.output_path as string).replace(/\\/g, '\\\\');
+  const outputPath = requireString(args, 'output_path').replace(/\\/g, '\\\\');
   const trim = args.trim_transparency !== false;
   const applyClip = args.apply_clipping_mask !== false;
   try {
@@ -601,7 +602,7 @@ async function setActiveDocument(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const name = args.name as string;
+  const name = requireString(args, 'name');
   try {
     const api = await new PhotoshopAPIFactory(connection).createAPI();
     const result = await api.executeScript(`
@@ -624,7 +625,7 @@ async function addGuide(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const orientation = (args.orientation as string).toUpperCase();
+  const orientation = requireString(args, 'orientation').toUpperCase();
   const position = args.position as number;
   try {
     const api = await new PhotoshopAPIFactory(connection).createAPI();

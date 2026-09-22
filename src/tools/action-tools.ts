@@ -2,6 +2,7 @@ import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { ExtendScriptSnippets } from '../api/extendscript.js';
+import { requireString } from '../utils/args.js';
 
 export function createActionTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -50,8 +51,8 @@ async function playAction(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const actionName = args.actionName as string;
-  const actionSetName = args.actionSetName as string;
+  const actionName = requireString(args, 'actionName');
+  const actionSetName = requireString(args, 'actionSetName');
 
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);
@@ -85,7 +86,7 @@ async function executeCustomScript(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const code = args.code as string;
+  const code = requireString(args, 'code');
 
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);

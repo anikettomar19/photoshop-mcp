@@ -2,6 +2,7 @@ import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { ExtendScriptSnippets } from '../api/extendscript.js';
+import { requireString } from '../utils/args.js';
 
 export function createLayerOrderingTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -78,8 +79,8 @@ async function moveLayerToPosition(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const targetLayerName = args.targetLayerName as string;
-  const position = args.position as string;
+  const targetLayerName = requireString(args, 'targetLayerName');
+  const position = requireString(args, 'position');
 
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);

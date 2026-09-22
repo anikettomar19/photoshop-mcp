@@ -13,6 +13,7 @@ import {
   saveCatalog,
   getProjectPaths,
 } from './sprite-tools.js';
+import { requireString } from '../utils/args.js';
 import { batchExportLayers } from './utility-tools.js';
 import { scriptReplaceSmartObject } from './smart-object-tools.js';
 
@@ -194,9 +195,9 @@ async function extractSpriteToCatalog(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const layerPath = args.layerPath as string;
-  const outputPath = args.outputPath as string;
-  const intent = args.intent as string;
+  const layerPath = requireString(args, 'layerPath');
+  const outputPath = requireString(args, 'outputPath');
+  const intent = requireString(args, 'intent');
   const theme = (args.theme as string | undefined) ?? '';
   const notes = (args.notes as string | undefined) ?? '';
   const usedIn = ((args.usedIn as string | undefined) ?? '')
@@ -282,7 +283,7 @@ async function prepUiForUnity(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const exportDir = args.exportDir as string;
+  const exportDir = requireString(args, 'exportDir');
   const scaleFactor = (args.scaleFactor as number | undefined) ?? 1.0;
   const groupFilter = (args.groupFilter as string | undefined) ?? '';
   const documentName = (args.documentName as string | undefined) ?? '';
@@ -432,8 +433,8 @@ async function swapMockupAsset(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const smartObjectPath = args.smartObjectPath as string;
-  const newAssetPath    = args.newAssetPath as string;
+  const smartObjectPath = requireString(args, 'smartObjectPath');
+  const newAssetPath    = requireString(args, 'newAssetPath');
   const fitToLayer      = (args.fitToLayer  as boolean | undefined) ?? true;
   const saveAfter       = (args.saveAfter   as boolean | undefined) ?? false;
   const exportPreviewPath = args.exportPreviewPath as string | undefined;
