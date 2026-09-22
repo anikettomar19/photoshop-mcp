@@ -68,8 +68,9 @@ export class MacOSDetector {
   private getCommonPaths(): string[] {
     const paths: string[] = [];
 
-    // Generate paths for versions 2012-2025
-    for (let year = 2025; year >= 2012; year--) {
+    // Generate paths for versions 2012-current+1 (stay ahead of yearly Adobe releases)
+    const currentYear = new Date().getFullYear();
+    for (let year = currentYear + 1; year >= 2012; year--) {
       paths.push(
         `/Applications/Adobe Photoshop ${year}/Adobe Photoshop ${year}.app`,
         `/Applications/Adobe Photoshop CC ${year}/Adobe Photoshop CC ${year}.app`,
