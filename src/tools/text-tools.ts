@@ -206,7 +206,7 @@ async function updateTextContent(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const text = requireString(args, 'text');
+  const text = requireString(args, 'text', { allowEmpty: true });
 
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);

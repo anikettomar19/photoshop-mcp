@@ -2,7 +2,7 @@ import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { ExtendScriptSnippets } from '../api/extendscript.js';
-import { requireString } from '../utils/args.js';
+import { requireString, requireNumber } from '../utils/args.js';
 
 export function createLayerTransformTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -262,7 +262,7 @@ async function getLayerRT(
   args: Record<string, unknown>
 ): Promise<ToolResult> {
   const layerPath = requireString(args, 'layer_path');
-  const scaleFactor = args.scale_factor as number;
+  const scaleFactor = requireNumber(args, 'scale_factor');
 
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);

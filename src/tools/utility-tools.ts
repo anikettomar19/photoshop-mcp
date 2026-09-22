@@ -1,7 +1,7 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
-import { requireString } from '../utils/args.js';
+import { requireString, requireNumber } from '../utils/args.js';
 
 export function createUtilityTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -626,7 +626,7 @@ async function addGuide(
   args: Record<string, unknown>
 ): Promise<ToolResult> {
   const orientation = requireString(args, 'orientation').toUpperCase();
-  const position = args.position as number;
+  const position = requireNumber(args, 'position');
   try {
     const api = await new PhotoshopAPIFactory(connection).createAPI();
     const result = await api.executeScript(`

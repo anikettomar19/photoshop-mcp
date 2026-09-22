@@ -227,7 +227,7 @@ async function createTextLayer(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const text = requireString(args, 'text');
+  const text = requireString(args, 'text', { allowEmpty: true });
   const x = (args.x as number) || 100;
   const y = (args.y as number) || 100;
   const fontSize = (args.fontSize as number) || 24;
