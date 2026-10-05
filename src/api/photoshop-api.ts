@@ -100,8 +100,16 @@ class ExtendScriptPhotoshopAPI implements PhotoshopAPI {
   private wrapInErrorHandling(script: string): string {
     // ExtendScript doesn't have JSON object, we return plain result
     // The result will be converted to string by Photoshop
+    //
+    // Dialogs are turned off for the duration of the script: with them on, an
+    // error (e.g. sampling outside the canvas) opens a modal alert that blocks
+    // every later script until someone clicks it, so one bad call turned into a
+    // run of timeouts. With them off the same error is thrown and reported.
+    // The user's own setting is restored afterwards.
     return `
 (function() {
+  var __prevDialogs = app.displayDialogs;
+  app.displayDialogs = DialogModes.NO;
   try {
     var result = (function() {
       ${script}
@@ -113,6 +121,8 @@ class ExtendScriptPhotoshopAPI implements PhotoshopAPI {
     return String(result);
   } catch (error) {
     return 'ERROR: ' + (error.message || String(error));
+  } finally {
+    app.displayDialogs = __prevDialogs;
   }
 })();
     `.trim();
