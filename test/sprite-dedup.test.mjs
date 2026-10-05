@@ -32,10 +32,7 @@ test('identical art across folders collapses to one entry, and stays cheap to re
     assert.equal(first.unique_sprites, 2);
     assert.equal(first.duplicate_files_collapsed, 1);
     assert.deepEqual(first.duplicates_sample, [
-      {
-        canonical: 'Assets/Sprites/UI/tab.png',
-        duplicates: ['Assets/Resources_moved/old/tab_copy.png'],
-      },
+      { canonical: 'Assets/Sprites/UI/tab.png', duplicates: ['Assets/Resources_moved/old/tab_copy.png'] },
     ]);
 
     // Second run: nothing changed, so nothing is re-decoded — including the

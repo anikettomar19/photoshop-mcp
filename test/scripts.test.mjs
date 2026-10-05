@@ -113,14 +113,8 @@ test('jsxString round-trips through the JS parser', () => {
 });
 
 test('identifier arguments are validated, not spliced', () => {
-  assert.throws(
-    () => ExtendScriptSnippets.setLayerBlendMode('NORMAL; alert(1)'),
-    /invalid blend mode/
-  );
+  assert.throws(() => ExtendScriptSnippets.setLayerBlendMode('NORMAL; alert(1)'), /invalid blend mode/);
   assert.throws(() => ExtendScriptSnippets.setTextAlignment('MIDDLE'), /invalid text alignment/);
-  assert.throws(
-    () => ExtendScriptSnippets.applyAddNoise(1, 'PERLIN', false),
-    /invalid noise distribution/
-  );
+  assert.throws(() => ExtendScriptSnippets.applyAddNoise(1, 'PERLIN', false), /invalid noise distribution/);
   assert.equal(jsxEnum('A', ['A', 'B'], 'x'), 'A');
 });

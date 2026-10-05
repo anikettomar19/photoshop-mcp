@@ -18,18 +18,16 @@ test('SerialQueue runs one task at a time, in order, past failures', async () =>
   const queue = new SerialQueue();
   const log = [];
   let running = 0;
-  const task =
-    (name, ms, fail = false) =>
-    async () => {
-      running++;
-      assert.equal(running, 1, 'tasks overlapped');
-      log.push(`start ${name}`);
-      await new Promise((r) => setTimeout(r, ms));
-      log.push(`end ${name}`);
-      running--;
-      if (fail) throw new Error(name);
-      return name;
-    };
+  const task = (name, ms, fail = false) => async () => {
+    running++;
+    assert.equal(running, 1, 'tasks overlapped');
+    log.push(`start ${name}`);
+    await new Promise((r) => setTimeout(r, ms));
+    log.push(`end ${name}`);
+    running--;
+    if (fail) throw new Error(name);
+    return name;
+  };
 
   const results = await Promise.allSettled([
     queue.run(task('a', 20, true)),
