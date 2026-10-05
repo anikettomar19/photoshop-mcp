@@ -75,3 +75,26 @@ test('an index built before content hashes is rehashed once so dedup applies', a
     rmSync(cacheDirFor(root), { recursive: true, force: true });
   }
 });
+
+test('a sliced copy stays in the nine-slice index when dedup keeps an unsliced canonical', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'psmcp-dedup-'));
+  try {
+    // Same pixels; Assets/Sprites/plain wins canonical (shorter path) but has
+    // no border, while the deeper copy is a 9-slice sprite.
+    await writeSprite(join(root, 'Assets/Sprites/plain/bg.png'), 0xffffffff);
+    const sliced = join(root, 'Assets/Sprites/common9Slice/nested/bg_9slice.png');
+    await writeSprite(sliced, 0xffffffff);
+    writeFileSync(sliced + '.meta', 'TextureImporter:\n  spriteBorder: {x: 4, y: 4, z: 4, w: 4}\n');
+
+    const res = await rebuild(root);
+    assert.equal(res.unique_sprites, 1);
+    assert.equal(res.duplicates_sample[0].canonical, 'Assets/Sprites/plain/bg.png');
+    assert.equal(res.nine_slice_sprites, 1);
+    const ns = JSON.parse(readFileSync(res.nine_slice_index_path, 'utf8'));
+    const paths = (Array.isArray(ns) ? ns : ns.sprites).map((e) => e.path);
+    assert.deepEqual(paths, ['Assets/Sprites/common9Slice/nested/bg_9slice.png']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(cacheDirFor(root), { recursive: true, force: true });
+  }
+});
