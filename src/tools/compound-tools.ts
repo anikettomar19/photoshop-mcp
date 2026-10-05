@@ -143,13 +143,23 @@ function flattenToLeaves(
   for (const layer of layers) {
     if (layer.type === 'GROUP') {
       if (includeGroups) {
-        out.push({ name: layer.name, path: layer.path, bounds: layer.bounds, unityRT: layer.unityRT });
+        out.push({
+          name: layer.name,
+          path: layer.path,
+          bounds: layer.bounds,
+          unityRT: layer.unityRT,
+        });
       }
       if (layer.children?.length) {
         out.push(...flattenToLeaves(layer.children, includeGroups));
       }
     } else {
-      out.push({ name: layer.name, path: layer.path, bounds: layer.bounds, unityRT: layer.unityRT });
+      out.push({
+        name: layer.name,
+        path: layer.path,
+        bounds: layer.bounds,
+        unityRT: layer.unityRT,
+      });
     }
   }
   return out;
@@ -189,7 +199,9 @@ async function extractSpriteToCatalog(
   const theme = (args.theme as string | undefined) ?? '';
   const notes = (args.notes as string | undefined) ?? '';
   const usedIn = ((args.usedIn as string | undefined) ?? '')
-    .split(',').map((s) => s.trim()).filter(Boolean);
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   const trimTransparency = (args.trimTransparency as boolean | undefined) ?? true;
   const addToIndex = (args.addToIndex as boolean | undefined) ?? true;
 
@@ -207,7 +219,15 @@ async function extractSpriteToCatalog(
 
     // ── 2. Export via batchExportLayers (battle-tested, no PS dialog issues) ─
     const exportResult = await batchExportLayers(connection, {
-      layers: [{ path: layerPath, output_path: outputPath, scale_percent: 100, trim: trimTransparency, apply_clipping_mask: false }],
+      layers: [
+        {
+          path: layerPath,
+          output_path: outputPath,
+          scale_percent: 100,
+          trim: trimTransparency,
+          apply_clipping_mask: false,
+        },
+      ],
     });
     if (exportResult.isError) {
       throw new Error((exportResult.content[0] as any).text);
@@ -352,9 +372,7 @@ async function prepUiForUnity(
     // ── 6. Build and write manifest ───────────────────────────────────────────
     const manifest = leaves.map((layer) => {
       const pngPath = join(exportDir, `${sanitise(layer.name)}.png`);
-      const layerResult = batchSummary?.results?.find?.(
-        (r: any) => r.path === layer.path
-      );
+      const layerResult = batchSummary?.results?.find?.((r: any) => r.path === layer.path);
       return {
         name: layer.name,
         path: layer.path,
@@ -422,11 +440,11 @@ async function swapMockupAsset(
   args: Record<string, unknown>
 ): Promise<ToolResult> {
   const smartObjectPath = requireString(args, 'smartObjectPath');
-  const newAssetPath    = requireString(args, 'newAssetPath');
-  const fitToLayer      = (args.fitToLayer  as boolean | undefined) ?? true;
-  const saveAfter       = (args.saveAfter   as boolean | undefined) ?? false;
+  const newAssetPath = requireString(args, 'newAssetPath');
+  const fitToLayer = (args.fitToLayer as boolean | undefined) ?? true;
+  const saveAfter = (args.saveAfter as boolean | undefined) ?? false;
   const exportPreviewPath = args.exportPreviewPath as string | undefined;
-  const documentName    = (args.documentName as string | undefined) ?? '';
+  const documentName = (args.documentName as string | undefined) ?? '';
 
   try {
     const api = await new PhotoshopAPIFactory(connection).createAPI();
@@ -442,15 +460,34 @@ async function swapMockupAsset(
     }
 
     // ── 2. Replace smart object content ──────────────────────────────────────
-    const replaceScript = scriptReplaceSmartObject(smartObjectPath, newAssetPath, fitToLayer, saveAfter);
+    const replaceScript = scriptReplaceSmartObject(
+      smartObjectPath,
+      newAssetPath,
+      fitToLayer,
+      saveAfter
+    );
     const replaceResult = (await api.executeScript(replaceScript, LONG_SCRIPT_TIMEOUT_MS)) as {
       replaced: boolean;
-      layerName: string;       // NEW name Photoshop assigned (matches the asset filename)
+      layerName: string; // NEW name Photoshop assigned (matches the asset filename)
       layerPath: string;
       fitApplied: boolean;
       saved: boolean;
-      originalBounds: { left: number; top: number; right: number; bottom: number; width: number; height: number };
-      finalBounds:    { left: number; top: number; right: number; bottom: number; width: number; height: number };
+      originalBounds: {
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+        width: number;
+        height: number;
+      };
+      finalBounds: {
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+        width: number;
+        height: number;
+      };
     };
 
     // ── 3. Export preview PNG (optional) ─────────────────────────────────────
@@ -465,7 +502,15 @@ async function swapMockupAsset(
       const updatedPath = pathSegments.join('/');
 
       const batchResult = await batchExportLayers(connection, {
-        layers: [{ path: updatedPath, output_path: exportPreviewPath, scale_percent: 100, trim: false, apply_clipping_mask: false }],
+        layers: [
+          {
+            path: updatedPath,
+            output_path: exportPreviewPath,
+            scale_percent: 100,
+            trim: false,
+            apply_clipping_mask: false,
+          },
+        ],
         document_name: documentName || undefined,
       });
 
@@ -474,9 +519,15 @@ async function swapMockupAsset(
           const batchData = JSON.parse((batchResult.content[0] as any).text);
           const layerResult = batchData?.results?.[0];
           if (layerResult?.status === 'OK') {
-            previewResult = { exportedPath: exportPreviewPath, width: layerResult.width, height: layerResult.height };
+            previewResult = {
+              exportedPath: exportPreviewPath,
+              width: layerResult.width,
+              height: layerResult.height,
+            };
           }
-        } catch { /* non-fatal */ }
+        } catch {
+          /* non-fatal */
+        }
       }
     }
 
@@ -573,7 +624,8 @@ export function createCompoundTools(connection: PhotoshopConnection): ToolDefini
             },
             project_root: {
               type: 'string',
-              description: 'Absolute path to Unity project root (overrides UNITY_PROJECT_ROOT env).',
+              description:
+                'Absolute path to Unity project root (overrides UNITY_PROJECT_ROOT env).',
             },
           },
           required: ['layerPath', 'outputPath', 'intent'],
@@ -628,8 +680,7 @@ export function createCompoundTools(connection: PhotoshopConnection): ToolDefini
             manifestPath: {
               type: 'string',
               description:
-                'Output path for the JSON manifest. ' +
-                'Default: {exportDir}/unity_manifest.json.',
+                'Output path for the JSON manifest. ' + 'Default: {exportDir}/unity_manifest.json.',
             },
           },
           required: ['exportDir'],
@@ -641,11 +692,11 @@ export function createCompoundTools(connection: PhotoshopConnection): ToolDefini
       tool: {
         name: 'photoshop_swap_mockup_asset',
         description:
-          'Compound tool: replace a smart object\'s content with a new asset and optionally ' +
+          "Compound tool: replace a smart object's content with a new asset and optionally " +
           'export a preview PNG — all in one call. ' +
           'Replaces the 3-step sequence of list_smart_objects → replace_smart_object → batch_export_layers. ' +
           'Use this for the common TechArt workflow: "swap this icon/texture into the mockup and show me the result." ' +
-          'Note: Photoshop renames the layer to the new asset\'s filename after replacement — ' +
+          "Note: Photoshop renames the layer to the new asset's filename after replacement — " +
           'this is expected behavior, not a bug. The new layer name is returned in the result.',
         inputSchema: {
           type: 'object',

@@ -9,10 +9,12 @@
  */
 import { searchSimilarSprites } from './sprite-tools.js';
 
-const [,, imagePath, projectRoot, thresholdStr, topNStr] = process.argv;
+const [, , imagePath, projectRoot, thresholdStr, topNStr] = process.argv;
 
 if (!imagePath || !projectRoot) {
-  process.stderr.write('Usage: find-similar-cli.js <image_path> <project_root> [threshold] [top_n]\n');
+  process.stderr.write(
+    'Usage: find-similar-cli.js <image_path> <project_root> [threshold] [top_n]\n'
+  );
   process.exit(1);
 }
 

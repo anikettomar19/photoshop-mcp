@@ -69,7 +69,8 @@ export function createLayerTools(connection: PhotoshopConnection): ToolDefinitio
     {
       tool: {
         name: 'photoshop_fill_layer',
-        description: 'Fill the active layer with a color. Fills only the current selection if there is one.',
+        description:
+          'Fill the active layer with a color. Fills only the current selection if there is one.',
         inputSchema: {
           type: 'object',
           properties: {

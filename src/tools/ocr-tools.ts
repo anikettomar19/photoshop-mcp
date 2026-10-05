@@ -15,7 +15,7 @@ import { requireString } from '../utils/args.js';
  */
 async function extractBrightPixels(
   imagePath: string,
-  brightnessThreshold: number = 200,
+  brightnessThreshold: number = 200
 ): Promise<Buffer> {
   const img = await Jimp.read(imagePath);
   const w = img.width;
@@ -32,7 +32,12 @@ async function extractBrightPixels(
       const b = (pixel >> 8) & 0xff;
       const a = pixel & 0xff;
 
-      if (a > 128 && r > brightnessThreshold && g > brightnessThreshold && b > brightnessThreshold) {
+      if (
+        a > 128 &&
+        r > brightnessThreshold &&
+        g > brightnessThreshold &&
+        b > brightnessThreshold
+      ) {
         result.setPixelColor(0xffffffff, x, y);
       }
     }
@@ -49,7 +54,7 @@ async function extractBrightPixels(
  */
 async function extractDarkPixels(
   imagePath: string,
-  darknessThreshold: number = 80,
+  darknessThreshold: number = 80
 ): Promise<Buffer> {
   const img = await Jimp.read(imagePath);
   const w = img.width;
@@ -119,7 +124,7 @@ export async function ocrFile(
   imagePath: string,
   mode: string = 'auto',
   brightnessThreshold: number = 200,
-  darknessThreshold: number = 80,
+  darknessThreshold: number = 80
 ): Promise<OcrResult> {
   let bestResult: OcrResult = { text: '', confidence: 0, words: [] };
 
@@ -160,7 +165,10 @@ async function ocrImage(args: Record<string, unknown>): Promise<ToolResult> {
   try {
     readFileSync(imagePath);
   } catch {
-    return { content: [{ type: 'text', text: `Error: File not found: ${imagePath}` }], isError: true };
+    return {
+      content: [{ type: 'text', text: `Error: File not found: ${imagePath}` }],
+      isError: true,
+    };
   }
 
   const mode = (args.mode as string) || 'auto';
@@ -184,14 +192,19 @@ async function ocrImage(args: Record<string, unknown>): Promise<ToolResult> {
               })),
             },
             null,
-            2,
+            2
           ),
         },
       ],
     };
   } catch (error) {
     return {
-      content: [{ type: 'text', text: `OCR error: ${error instanceof Error ? error.message : String(error)}` }],
+      content: [
+        {
+          type: 'text',
+          text: `OCR error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
       isError: true,
     };
   }
@@ -232,7 +245,8 @@ export function createOcrTools(): ToolDefinition[] {
             },
             brightness_threshold: {
               type: 'number',
-              description: 'Pixel brightness threshold for bright text extraction (0-255, default 200)',
+              description:
+                'Pixel brightness threshold for bright text extraction (0-255, default 200)',
               default: 200,
             },
             darkness_threshold: {

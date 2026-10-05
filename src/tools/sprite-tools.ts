@@ -5,7 +5,13 @@ import { createHash } from 'crypto';
 import { Worker } from 'worker_threads';
 import { Jimp } from 'jimp';
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
-import { computePhash, computeHsvHistogram, computeAlphaHash, computeNineSliceGeom, readSpriteBorder } from './sprite-hash.js';
+import {
+  computePhash,
+  computeHsvHistogram,
+  computeAlphaHash,
+  computeNineSliceGeom,
+  readSpriteBorder,
+} from './sprite-hash.js';
 import { requireString } from '../utils/args.js';
 
 // ---------------------------------------------------------------------------
@@ -21,7 +27,7 @@ export interface SpriteEntry {
   hsvHist: number[];
   alphaHash: number[];
   spriteBorder?: [number, number, number, number]; // [x,y,z,w] from .meta (9-slice only)
-  corner_radius?: number;        // 9-slice geometry (only present when spriteBorder is set)
+  corner_radius?: number; // 9-slice geometry (only present when spriteBorder is set)
   dominant_color?: number[] | null;
 }
 
@@ -59,7 +65,7 @@ export async function nineSliceStretch(
   img: InstanceType<typeof Jimp>,
   border: [number, number, number, number],
   tw: number,
-  th: number,
+  th: number
 ): Promise<any> {
   let [bl, bb, br, bt] = border.map(Math.round);
   const iw = img.width;
@@ -69,8 +75,14 @@ export async function nineSliceStretch(
   br = Math.min(br, Math.floor(iw / 2));
   bt = Math.min(bt, Math.floor(ih / 2));
   bb = Math.min(bb, Math.floor(ih / 2));
-  if (bl + br >= iw) { bl = Math.floor(iw / 3); br = Math.floor(iw / 3); }
-  if (bt + bb >= ih) { bt = Math.floor(ih / 3); bb = Math.floor(ih / 3); }
+  if (bl + br >= iw) {
+    bl = Math.floor(iw / 3);
+    br = Math.floor(iw / 3);
+  }
+  if (bt + bb >= ih) {
+    bt = Math.floor(ih / 3);
+    bb = Math.floor(ih / 3);
+  }
 
   const cw = iw - bl - br;
   const ch = ih - bt - bb;
@@ -79,7 +91,16 @@ export async function nineSliceStretch(
 
   const result = new Jimp({ width: tw, height: th, color: 0x00000000 });
 
-  const regions: Array<{ sx: number; sy: number; sw: number; sh: number; dx: number; dy: number; dw: number; dh: number }> = [
+  const regions: Array<{
+    sx: number;
+    sy: number;
+    sw: number;
+    sh: number;
+    dx: number;
+    dy: number;
+    dw: number;
+    dh: number;
+  }> = [
     { sx: 0, sy: 0, sw: bl, sh: bt, dx: 0, dy: 0, dw: bl, dh: bt },
     { sx: bl, sy: 0, sw: cw, sh: bt, dx: bl, dy: 0, dw: ncw, dh: bt },
     { sx: iw - br, sy: 0, sw: br, sh: bt, dx: tw - br, dy: 0, dw: br, dh: bt },
@@ -117,7 +138,7 @@ export function chiSquaredSim(a: number[], b: number[]): number {
   let dist = 0;
   for (let i = 0; i < a.length; i++) {
     const sum = a[i] + b[i];
-    if (sum > 0) dist += ((a[i] - b[i]) ** 2) / sum;
+    if (sum > 0) dist += (a[i] - b[i]) ** 2 / sum;
   }
   return Math.max(0, 1 - dist / 2);
 }
@@ -182,8 +203,7 @@ export function cacheDirFor(projectRoot: string): string {
 }
 
 export function getProjectPaths(args: Record<string, unknown>) {
-  const projectRoot =
-    (args.project_root as string | undefined) || process.env.UNITY_PROJECT_ROOT;
+  const projectRoot = (args.project_root as string | undefined) || process.env.UNITY_PROJECT_ROOT;
   if (!projectRoot) {
     throw new Error(
       'Project root not set. Set UNITY_PROJECT_ROOT in .mcp.json env, or pass project_root arg.'
@@ -304,7 +324,7 @@ export async function searchSimilarSprites(
   queryPath: string,
   projectRoot: string,
   threshold: number = 0.5,
-  topN: number = 5,
+  topN: number = 5
 ): Promise<Array<Record<string, unknown>>> {
   const indexPath = join(cacheDirFor(projectRoot), 'sprite_index.json');
   const catalogPath = join(projectRoot, 'Assets', 'Sprites', '.sprite_catalog.json');
@@ -314,138 +334,147 @@ export async function searchSimilarSprites(
     throw new Error('Index is empty — call rebuild_sprite_index first.');
   }
 
-  const qImg   = await Jimp.read(queryPath);
+  const qImg = await Jimp.read(queryPath);
   const qPhash = computePhash(qImg);
-  const qHsv   = computeHsvHistogram(qImg);
+  const qHsv = computeHsvHistogram(qImg);
   const qAlpha = computeAlphaHash(qImg);
   const qAspect = qImg.bitmap.width / (qImg.bitmap.height || 1);
-  const qWidth  = qImg.bitmap.width;
+  const qWidth = qImg.bitmap.width;
   const qHeight = qImg.bitmap.height;
 
   const catalog = loadCatalog(catalogPath);
   const results: Array<Record<string, unknown>> = [];
   const nineSliceCandidates: Array<{ rel: string; entry: SpriteEntry; hsvScore: number }> = [];
 
-    // Pass 1: native comparison (pure arithmetic). Bordered sprites that fail
-    // the aspect gate but could 9-slice-stretch to the query size are queued
-    // for pass 2 instead of being stretched inline — stretching every bordered
-    // candidate cost 5-15s per query.
-    const staleKeys: string[] = [];
-    for (const [rel, entry] of Object.entries(index)) {
-      // Deletion guard: the index can lag behind disk when a sprite is deleted or
-      // moved without a rebuild (PABLO skips rebuild_sprite_index when no new sprites
-      // were imported). Never return a match for a file that no longer exists — a
-      // ghost match produced a valid-looking hit whose .meta GUID was gone downstream.
-      // Collect the dead keys and self-heal the index after the pass.
-      if (!existsSync(join(projectRoot, rel))) {
-        staleKeys.push(rel);
-        continue;
+  // Pass 1: native comparison (pure arithmetic). Bordered sprites that fail
+  // the aspect gate but could 9-slice-stretch to the query size are queued
+  // for pass 2 instead of being stretched inline — stretching every bordered
+  // candidate cost 5-15s per query.
+  const staleKeys: string[] = [];
+  for (const [rel, entry] of Object.entries(index)) {
+    // Deletion guard: the index can lag behind disk when a sprite is deleted or
+    // moved without a rebuild (PABLO skips rebuild_sprite_index when no new sprites
+    // were imported). Never return a match for a file that no longer exists — a
+    // ghost match produced a valid-looking hit whose .meta GUID was gone downstream.
+    // Collect the dead keys and self-heal the index after the pass.
+    if (!existsSync(join(projectRoot, rel))) {
+      staleKeys.push(rel);
+      continue;
+    }
+    const aspectDiff = Math.abs(entry.aspectRatio - qAspect) / Math.max(qAspect, 0.01);
+
+    if (aspectDiff > 0.25) {
+      if (entry.spriteBorder && qWidth > entry.width * 1.5 && qHeight > entry.height * 1.2) {
+        const hsvS = chiSquaredSim(qHsv, entry.hsvHist);
+        if (hsvS > 0.3) nineSliceCandidates.push({ rel, entry, hsvScore: hsvS });
       }
-      const aspectDiff = Math.abs(entry.aspectRatio - qAspect) / Math.max(qAspect, 0.01);
+      continue;
+    }
 
-      if (aspectDiff > 0.25) {
-        if (entry.spriteBorder && qWidth > entry.width * 1.5 && qHeight > entry.height * 1.2) {
-          const hsvS = chiSquaredSim(qHsv, entry.hsvHist);
-          if (hsvS > 0.3) nineSliceCandidates.push({ rel, entry, hsvScore: hsvS });
-        }
-        continue;
+    const nativePhash = hammingSim(qPhash, entry.phash);
+    const nativeHsv = chiSquaredSim(qHsv, entry.hsvHist);
+    const nativeAlpha = hammingSim(qAlpha, entry.alphaHash);
+    const sc = combinedScore(nativePhash, nativeHsv, nativeAlpha, aspectDiff);
+
+    if (sc >= threshold) {
+      results.push({
+        path: rel,
+        score: Math.round(sc * 1000) / 1000,
+        breakdown: {
+          phash: Math.round(nativePhash * 1000) / 1000,
+          hsv: Math.round(nativeHsv * 1000) / 1000,
+          alpha: Math.round(nativeAlpha * 1000) / 1000,
+        },
+        dimensions: `${entry.width}×${entry.height}`,
+        _spriteBorder: entry.spriteBorder,
+      });
+    }
+  }
+
+  // Self-heal: drop entries whose files vanished so subsequent queries are clean
+  // and the on-disk index converges toward disk without waiting for a full rebuild.
+  if (staleKeys.length > 0) {
+    for (const k of staleKeys) delete index[k];
+    saveIndex(indexPath, index);
+  }
+
+  // Pass 2: 9-slice stretch only the top HSV-prefiltered candidates.
+  nineSliceCandidates.sort((a, b) => b.hsvScore - a.hsvScore);
+  for (const { rel, entry } of nineSliceCandidates.slice(0, NINE_SLICE_RECHECK_LIMIT)) {
+    try {
+      const absPath = join(projectRoot, rel);
+      const spriteImg = await Jimp.read(absPath);
+      const stretched = await nineSliceStretch(
+        spriteImg as any,
+        entry.spriteBorder!,
+        qWidth,
+        qHeight
+      );
+
+      // Round-trip through a lossless PNG (preserves exact pixels), then
+      // decode once and compute all three hashes from that single decode.
+      // pid + counter avoids collisions between concurrent searches.
+      const tmpPath = `/tmp/_9slice_stretch_${process.pid}_${++tmpCounter}.png`;
+      const buf = await stretched.getBuffer('image/png');
+      writeFileSync(tmpPath, buf);
+      const sImg = await Jimp.read(tmpPath);
+      const sPhash = hammingSim(qPhash, computePhash(sImg));
+      const sHsv = chiSquaredSim(qHsv, computeHsvHistogram(sImg));
+      const sAlpha = hammingSim(qAlpha, computeAlphaHash(sImg));
+      try {
+        const { unlinkSync } = await import('fs');
+        unlinkSync(tmpPath);
+      } catch (err) {
+        console.warn(
+          `temp cleanup failed for ${tmpPath}: ${err instanceof Error ? err.message : String(err)}`
+        );
       }
 
-      const nativePhash = hammingSim(qPhash, entry.phash);
-      const nativeHsv = chiSquaredSim(qHsv, entry.hsvHist);
-      const nativeAlpha = hammingSim(qAlpha, entry.alphaHash);
-      const sc = combinedScore(nativePhash, nativeHsv, nativeAlpha, aspectDiff);
-
+      const sc = combinedScore(sPhash, sHsv, sAlpha, 0);
       if (sc >= threshold) {
         results.push({
           path: rel,
           score: Math.round(sc * 1000) / 1000,
           breakdown: {
-            phash: Math.round(nativePhash * 1000) / 1000,
-            hsv:   Math.round(nativeHsv * 1000) / 1000,
-            alpha: Math.round(nativeAlpha * 1000) / 1000,
+            phash: Math.round(sPhash * 1000) / 1000,
+            hsv: Math.round(sHsv * 1000) / 1000,
+            alpha: Math.round(sAlpha * 1000) / 1000,
           },
           dimensions: `${entry.width}×${entry.height}`,
+          match_type: '9slice_stretched',
           _spriteBorder: entry.spriteBorder,
         });
       }
+    } catch (err) {
+      console.warn(
+        `9-slice stretch failed for ${rel}: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
+  }
 
-    // Self-heal: drop entries whose files vanished so subsequent queries are clean
-    // and the on-disk index converges toward disk without waiting for a full rebuild.
-    if (staleKeys.length > 0) {
-      for (const k of staleKeys) delete index[k];
-      saveIndex(indexPath, index);
-    }
-
-    // Pass 2: 9-slice stretch only the top HSV-prefiltered candidates.
-    nineSliceCandidates.sort((a, b) => b.hsvScore - a.hsvScore);
-    for (const { rel, entry } of nineSliceCandidates.slice(0, NINE_SLICE_RECHECK_LIMIT)) {
-      try {
-        const absPath = join(projectRoot, rel);
-        const spriteImg = await Jimp.read(absPath);
-        const stretched = await nineSliceStretch(spriteImg as any, entry.spriteBorder!, qWidth, qHeight);
-
-        // Round-trip through a lossless PNG (preserves exact pixels), then
-        // decode once and compute all three hashes from that single decode.
-        // pid + counter avoids collisions between concurrent searches.
-        const tmpPath = `/tmp/_9slice_stretch_${process.pid}_${++tmpCounter}.png`;
-        const buf = await stretched.getBuffer('image/png');
-        writeFileSync(tmpPath, buf);
-        const sImg = await Jimp.read(tmpPath);
-        const sPhash = hammingSim(qPhash, computePhash(sImg));
-        const sHsv = chiSquaredSim(qHsv, computeHsvHistogram(sImg));
-        const sAlpha = hammingSim(qAlpha, computeAlphaHash(sImg));
-        try {
-          const { unlinkSync } = await import('fs');
-          unlinkSync(tmpPath);
-        } catch (err) {
-          console.warn(`temp cleanup failed for ${tmpPath}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-
-        const sc = combinedScore(sPhash, sHsv, sAlpha, 0);
-        if (sc >= threshold) {
-          results.push({
-            path: rel,
-            score: Math.round(sc * 1000) / 1000,
-            breakdown: {
-              phash: Math.round(sPhash * 1000) / 1000,
-              hsv:   Math.round(sHsv * 1000) / 1000,
-              alpha: Math.round(sAlpha * 1000) / 1000,
-            },
-            dimensions: `${entry.width}×${entry.height}`,
-            match_type: '9slice_stretched',
-            _spriteBorder: entry.spriteBorder,
-          });
-        }
-      } catch (err) {
-        console.warn(`9-slice stretch failed for ${rel}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-
-    // Deduplicate by path (keep highest score), attach catalog + spriteBorder.
-    const best = new Map<string, Record<string, unknown>>();
-    for (const r of results) {
-      const p = r.path as string;
-      const prev = best.get(p);
-      if (!prev || (r.score as number) > (prev.score as number)) best.set(p, r);
-    }
-    const finalResults = [...best.values()]
-      .sort((a, b) => (b.score as number) - (a.score as number))
-      .slice(0, topN);
-    for (const r of finalResults) {
-      const border = r._spriteBorder;
-      delete r._spriteBorder;
-      if (border) r.spriteBorder = border;
-      const cat = catalog[r.path as string];
-      if (cat) r.catalog = cat;
-    }
+  // Deduplicate by path (keep highest score), attach catalog + spriteBorder.
+  const best = new Map<string, Record<string, unknown>>();
+  for (const r of results) {
+    const p = r.path as string;
+    const prev = best.get(p);
+    if (!prev || (r.score as number) > (prev.score as number)) best.set(p, r);
+  }
+  const finalResults = [...best.values()]
+    .sort((a, b) => (b.score as number) - (a.score as number))
+    .slice(0, topN);
+  for (const r of finalResults) {
+    const border = r._spriteBorder;
+    delete r._spriteBorder;
+    if (border) r.spriteBorder = border;
+    const cat = catalog[r.path as string];
+    if (cat) r.catalog = cat;
+  }
 
   return finalResults;
 }
 
 async function findSimilarSprites(args: Record<string, unknown>): Promise<ToolResult> {
-  const topN      = (args.top_n     as number | undefined) ?? 5;
+  const topN = (args.top_n as number | undefined) ?? 5;
   const threshold = (args.threshold as number | undefined) ?? 0.5;
   const queryPath = requireString(args, 'image_path');
 
@@ -457,7 +486,12 @@ async function findSimilarSprites(args: Record<string, unknown>): Promise<ToolRe
     };
   } catch (error) {
     return {
-      content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
       isError: true,
     };
   }
@@ -491,18 +525,23 @@ async function runHashWorkers(jobs: HashJob[]): Promise<WorkerResult> {
   const chunks: HashJob[][] = Array.from({ length: poolSize }, () => []);
   jobs.forEach((job, i) => chunks[i % poolSize].push(job));
 
-  await Promise.all(chunks.map((chunk) => new Promise<void>((resolve, reject) => {
-    const worker = new Worker(workerUrl, { workerData: { jobs: chunk } });
-    worker.once('message', (msg: WorkerResult) => {
-      merged.entries.push(...msg.entries);
-      merged.errors.push(...msg.errors);
-    });
-    worker.once('error', reject);
-    worker.once('exit', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`hash worker exited with code ${code}`));
-    });
-  })));
+  await Promise.all(
+    chunks.map(
+      (chunk) =>
+        new Promise<void>((resolve, reject) => {
+          const worker = new Worker(workerUrl, { workerData: { jobs: chunk } });
+          worker.once('message', (msg: WorkerResult) => {
+            merged.entries.push(...msg.entries);
+            merged.errors.push(...msg.errors);
+          });
+          worker.once('error', reject);
+          worker.once('exit', (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`hash worker exited with code ${code}`));
+          });
+        })
+    )
+  );
 
   return merged;
 }
@@ -513,7 +552,9 @@ export async function rebuildSpriteIndex(args: Record<string, unknown>): Promise
     const existing = loadIndex(indexPath);
     const allPaths = walkDir(spritesRoot);
 
-    let indexed = 0, updated = 0, skipped = 0;
+    let indexed = 0,
+      updated = 0,
+      skipped = 0;
     const errors: object[] = [];
     const sprites: Record<string, SpriteEntry> = {};
     const jobs: HashJob[] = [];
@@ -541,7 +582,8 @@ export async function rebuildSpriteIndex(args: Record<string, unknown>): Promise
     const { entries, errors: workerErrors } = await runHashWorkers(jobs);
     for (const { rel, isNew, entry } of entries) {
       sprites[rel] = entry;
-      if (isNew) indexed++; else updated++;
+      if (isNew) indexed++;
+      else updated++;
     }
     errors.push(...workerErrors);
 
@@ -552,28 +594,42 @@ export async function rebuildSpriteIndex(args: Record<string, unknown>): Promise
     writeNineSliceIndex(nineSliceIndexPath, nineSliceList);
     const nineSliceCount = nineSliceList.length;
     return {
-      content: [{ type: 'text' as const, text: JSON.stringify({
-        total_sprites: allPaths.length,
-        newly_indexed: indexed,
-        updated,
-        skipped_unchanged: skipped,
-        nine_slice_sprites: nineSliceCount,
-        errors,
-        index_path: indexPath,
-        nine_slice_index_path: nineSliceIndexPath,
-      }, null, 2) }],
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(
+            {
+              total_sprites: allPaths.length,
+              newly_indexed: indexed,
+              updated,
+              skipped_unchanged: skipped,
+              nine_slice_sprites: nineSliceCount,
+              errors,
+              index_path: indexPath,
+              nine_slice_index_path: nineSliceIndexPath,
+            },
+            null,
+            2
+          ),
+        },
+      ],
     };
   } catch (error) {
     return {
-      content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
       isError: true,
     };
   }
 }
 
 async function catalogSearch(args: Record<string, unknown>): Promise<ToolResult> {
-  const intent        = (args.intent         as string | undefined) ?? '';
-  const theme         = (args.theme          as string | undefined) ?? '';
+  const intent = (args.intent as string | undefined) ?? '';
+  const theme = (args.theme as string | undefined) ?? '';
   const notesContains = (args.notes_contains as string | undefined) ?? '';
 
   try {
@@ -583,15 +639,21 @@ async function catalogSearch(args: Record<string, unknown>): Promise<ToolResult>
 
     for (const [p, entry] of Object.entries(catalog)) {
       if (intent && entry.intent !== intent) continue;
-      if (theme  && entry.theme  !== theme)  continue;
-      if (notesContains && !entry.notes.toLowerCase().includes(notesContains.toLowerCase())) continue;
+      if (theme && entry.theme !== theme) continue;
+      if (notesContains && !entry.notes.toLowerCase().includes(notesContains.toLowerCase()))
+        continue;
       results.push({ path: p, ...entry });
     }
 
     return { content: [{ type: 'text' as const, text: JSON.stringify(results, null, 2) }] };
   } catch (error) {
     return {
-      content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
       isError: true,
     };
   }
@@ -599,11 +661,16 @@ async function catalogSearch(args: Record<string, unknown>): Promise<ToolResult>
 
 async function catalogTag(args: Record<string, unknown>): Promise<ToolResult> {
   const spritePath = requireString(args, 'sprite_path');
-  const intent     = requireString(args, 'intent');
-  const theme      = (args.theme    as string | undefined) ?? '';
-  const notes      = (args.notes    as string | undefined) ?? '';
-  const usedInRaw  = (args.used_in  as string | undefined) ?? '';
-  const usedIn     = usedInRaw ? usedInRaw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  const intent = requireString(args, 'intent');
+  const theme = (args.theme as string | undefined) ?? '';
+  const notes = (args.notes as string | undefined) ?? '';
+  const usedInRaw = (args.used_in as string | undefined) ?? '';
+  const usedIn = usedInRaw
+    ? usedInRaw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
 
   try {
     const { catalogPath } = getProjectPaths(args);
@@ -617,11 +684,21 @@ async function catalogTag(args: Record<string, unknown>): Promise<ToolResult> {
     };
     saveCatalog(catalogPath, catalog);
     return {
-      content: [{ type: 'text' as const, text: JSON.stringify({ status: 'tagged', sprite_path: spritePath, intent, theme }) }],
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify({ status: 'tagged', sprite_path: spritePath, intent, theme }),
+        },
+      ],
     };
   } catch (error) {
     return {
-      content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
       isError: true,
     };
   }
@@ -639,7 +716,12 @@ async function catalogList(args: Record<string, unknown>): Promise<ToolResult> {
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
     return {
-      content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
       isError: true,
     };
   }

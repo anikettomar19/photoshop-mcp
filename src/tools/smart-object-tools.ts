@@ -49,7 +49,7 @@ export function createSmartObjectTools(connection: PhotoshopConnection): ToolDef
                 'layer bounds (fit-within, aspect ratio preserved). Due to Photoshop smart object ' +
                 'transform stacking the result is within ~10-15px of the original bounds — suitable ' +
                 'for mockup workflows but not pixel-perfect. ' +
-                'Default: false (Photoshop inherits the previous content\'s transform as-is).',
+                "Default: false (Photoshop inherits the previous content's transform as-is).",
               default: false,
             },
             saveAfter: {

@@ -129,7 +129,8 @@ export function createUtilityTools(connection: PhotoshopConnection): ToolDefinit
             },
             position: {
               type: 'number',
-              description: 'Position in pixels (distance from top for horizontal, from left for vertical)',
+              description:
+                'Position in pixels (distance from top for horizontal, from left for vertical)',
             },
           },
           required: ['orientation', 'position'],
@@ -304,7 +305,15 @@ async function getSessionInfo(connection: PhotoshopConnection): Promise<ToolResu
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -331,7 +340,15 @@ async function getSelectionInfo(connection: PhotoshopConnection): Promise<ToolRe
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -361,7 +378,15 @@ async function sampleColorAtPixel(
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -414,7 +439,8 @@ async function exportLayerAsPng(
       // runs in a single script. Breaking into sequential steps fixes this.
 
       // Step 1: Duplicate doc, hide all, show target + clip base + ancestors
-      await api.executeScript(`
+      await api.executeScript(
+        `
         ${docByNameJs}
         var origDoc = docByName(${jsxString(origDocName)});
         if (!origDoc) throw new Error('Original document no longer open: ' + ${jsxString(origDocName)});
@@ -462,10 +488,13 @@ async function exportLayerAsPng(
         }
 
         return { ready: true, clipBase: clipBase ? clipBase.name : null };
-      `, LONG_SCRIPT_TIMEOUT_MS);
+      `,
+        LONG_SCRIPT_TIMEOUT_MS
+      );
 
       // Step 2: Copy Merged (composites visible layers respecting clip mask + shape)
-      await api.executeScript(`
+      await api.executeScript(
+        `
         ${docByNameJs}
         var dupDoc = docByName(${jsxString(dupDocName)});
         if (!dupDoc) throw new Error('Temp document vanished: ' + ${jsxString(dupDocName)});
@@ -473,10 +502,13 @@ async function exportLayerAsPng(
         dupDoc.selection.selectAll();
         dupDoc.selection.copy(true);
         return { copied: true };
-      `, LONG_SCRIPT_TIMEOUT_MS);
+      `,
+        LONG_SCRIPT_TIMEOUT_MS
+      );
 
       // Step 3: Close dup doc, create new transparent doc, paste
-      await api.executeScript(`
+      await api.executeScript(
+        `
         ${docByNameJs}
         var dupDoc = docByName(${jsxString(dupDocName)});
         if (!dupDoc) throw new Error('Temp document vanished: ' + ${jsxString(dupDocName)});
@@ -490,11 +522,14 @@ async function exportLayerAsPng(
         newDoc.paste();
         try { newDoc.selection.deselect(); } catch(e) {}
         return { pasted: true };
-      `, LONG_SCRIPT_TIMEOUT_MS);
+      `,
+        LONG_SCRIPT_TIMEOUT_MS
+      );
 
       // Step 4: Trim, save, close, return to original doc — all by name,
       // never via app.activeDocument (user focus changes between scripts).
-      const result = await api.executeScript(`
+      const result = await api.executeScript(
+        `
         ${docByNameJs}
         var newDoc = docByName(${jsxString(pasteDocName)});
         if (!newDoc) throw new Error('Paste document vanished: ' + ${jsxString(pasteDocName)});
@@ -522,13 +557,15 @@ async function exportLayerAsPng(
           trimmed: ${trim},
           clippingApplied: true
         };
-      `, LONG_SCRIPT_TIMEOUT_MS);
+      `,
+        LONG_SCRIPT_TIMEOUT_MS
+      );
 
       return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
-
     } else {
       // ── SIMPLE PATH (no clipping mask) ────────────────────────────────
-      const result = await api.executeScript(`
+      const result = await api.executeScript(
+        `
         var origDoc = app.activeDocument;
         var srcLayer = origDoc.activeLayer;
 
@@ -568,11 +605,21 @@ async function exportLayerAsPng(
           trimmed: ${trim},
           clippingApplied: false
         };
-      `, LONG_SCRIPT_TIMEOUT_MS);
+      `,
+        LONG_SCRIPT_TIMEOUT_MS
+      );
       return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
     }
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -596,7 +643,15 @@ async function duplicateDocument(
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -619,7 +674,15 @@ async function setActiveDocument(
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -644,7 +707,15 @@ async function addGuide(
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -660,7 +731,15 @@ async function clearGuides(connection: PhotoshopConnection): Promise<ToolResult>
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -696,7 +775,8 @@ export async function batchExportLayers(
     const configArrayStr = '[' + configEntries.join(',') + ']';
 
     const targetDocName = (args.document_name as string) || '';
-    const result = await api.executeScript(`
+    const result = await api.executeScript(
+      `
       var doc = app.activeDocument;
       if (${jsxString(targetDocName)}) {
         doc = null;
@@ -835,7 +915,9 @@ export async function batchExportLayers(
       }
 
       return results.join('\\n');
-    `, LONG_SCRIPT_TIMEOUT_MS);
+    `,
+      LONG_SCRIPT_TIMEOUT_MS
+    );
 
     // Parse pipe-delimited results into structured JSON
     const resultStr = String(result);
@@ -900,10 +982,10 @@ async function applyLevels(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const inputShadow    = (args.input_shadow    as number) ?? 0;
+  const inputShadow = (args.input_shadow as number) ?? 0;
   const inputHighlight = (args.input_highlight as number) ?? 255;
-  const midtoneGamma   = (args.midtone_gamma   as number) ?? 1.0;
-  const outputShadow   = (args.output_shadow   as number) ?? 0;
+  const midtoneGamma = (args.midtone_gamma as number) ?? 1.0;
+  const outputShadow = (args.output_shadow as number) ?? 0;
   const outputHighlight = (args.output_highlight as number) ?? 255;
   try {
     const api = await new PhotoshopAPIFactory(connection).createAPI();
@@ -926,6 +1008,14 @@ async function applyLevels(
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }

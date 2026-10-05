@@ -114,9 +114,13 @@ end timeout`;
     // Photoshop to answer scripts; 'open' returns as soon as launch starts.
     await new Promise<void>((resolve, reject) => {
       const child = spawn('open', ['-a', photoshopPath], { stdio: 'ignore' });
-      child.on('error', (error) => reject(new Error(`Failed to launch Photoshop: ${error.message}`)));
+      child.on('error', (error) =>
+        reject(new Error(`Failed to launch Photoshop: ${error.message}`))
+      );
       child.on('exit', (code) =>
-        code === 0 ? resolve() : reject(new Error(`Failed to launch Photoshop: open exited with ${code}`))
+        code === 0
+          ? resolve()
+          : reject(new Error(`Failed to launch Photoshop: open exited with ${code}`))
       );
     });
   }

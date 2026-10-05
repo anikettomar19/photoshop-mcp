@@ -109,7 +109,9 @@ End If
     // The caller waits for Photoshop to answer scripts; this only starts it.
     await new Promise<void>((resolve, reject) => {
       const child = spawn(photoshopPath, [], { detached: true, stdio: 'ignore' });
-      child.on('error', (error) => reject(new Error(`Failed to launch Photoshop: ${error.message}`)));
+      child.on('error', (error) =>
+        reject(new Error(`Failed to launch Photoshop: ${error.message}`))
+      );
       child.on('spawn', () => {
         child.unref();
         resolve();

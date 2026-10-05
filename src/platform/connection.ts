@@ -38,7 +38,7 @@ export class PhotoshopConnection {
   async ping(): Promise<boolean> {
     try {
       this.logger.debug('Pinging Photoshop...');
-      
+
       // Try to detect Photoshop if not already detected
       if (!this.photoshopInfo) {
         this.photoshopInfo = await this.detector.detect();

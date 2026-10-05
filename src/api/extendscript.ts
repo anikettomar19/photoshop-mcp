@@ -3,22 +3,55 @@
  * ExtendScript is the legacy scripting API for Photoshop
  */
 
-import { jsxEnum, jsxString } from "../utils/jsx.js";
+import { jsxEnum, jsxString } from '../utils/jsx.js';
 
 export const BLEND_MODES = [
-  "NORMAL", "DISSOLVE", "DARKEN", "MULTIPLY", "COLORBURN", "LINEARBURN", "DARKERCOLOR",
-  "LIGHTEN", "SCREEN", "COLORDODGE", "LINEARDODGE", "LIGHTERCOLOR", "OVERLAY", "SOFTLIGHT",
-  "HARDLIGHT", "VIVIDLIGHT", "LINEARLIGHT", "PINLIGHT", "HARDMIX", "DIFFERENCE", "EXCLUSION",
-  "SUBTRACT", "DIVIDE", "HUE", "SATURATION", "COLOR", "LUMINOSITY",
+  'NORMAL',
+  'DISSOLVE',
+  'DARKEN',
+  'MULTIPLY',
+  'COLORBURN',
+  'LINEARBURN',
+  'DARKERCOLOR',
+  'LIGHTEN',
+  'SCREEN',
+  'COLORDODGE',
+  'LINEARDODGE',
+  'LIGHTERCOLOR',
+  'OVERLAY',
+  'SOFTLIGHT',
+  'HARDLIGHT',
+  'VIVIDLIGHT',
+  'LINEARLIGHT',
+  'PINLIGHT',
+  'HARDMIX',
+  'DIFFERENCE',
+  'EXCLUSION',
+  'SUBTRACT',
+  'DIVIDE',
+  'HUE',
+  'SATURATION',
+  'COLOR',
+  'LUMINOSITY',
 ] as const;
 
-export const NOISE_DISTRIBUTIONS = ["UNIFORM", "GAUSSIAN"] as const;
+export const NOISE_DISTRIBUTIONS = ['UNIFORM', 'GAUSSIAN'] as const;
 
 export const TEXT_JUSTIFICATIONS = [
-  "LEFT", "CENTER", "RIGHT", "LEFTJUSTIFIED", "CENTERJUSTIFIED", "RIGHTJUSTIFIED", "FULLYJUSTIFIED",
+  'LEFT',
+  'CENTER',
+  'RIGHT',
+  'LEFTJUSTIFIED',
+  'CENTERJUSTIFIED',
+  'RIGHTJUSTIFIED',
+  'FULLYJUSTIFIED',
 ] as const;
 
-const NEW_DOCUMENT_MODES = ["NewDocumentMode.RGB", "NewDocumentMode.CMYK", "NewDocumentMode.GRAYSCALE"] as const;
+const NEW_DOCUMENT_MODES = [
+  'NewDocumentMode.RGB',
+  'NewDocumentMode.CMYK',
+  'NewDocumentMode.GRAYSCALE',
+] as const;
 
 /**
  * Helper functions for character/string ID conversion
@@ -171,13 +204,18 @@ export const ExtendScriptSnippets = {
   /**
    * Create a new document
    */
-  newDocument: (width: number, height: number, resolution = 72, colorMode = 'NewDocumentMode.RGB') => `
+  newDocument: (
+    width: number,
+    height: number,
+    resolution = 72,
+    colorMode = 'NewDocumentMode.RGB'
+  ) => `
     var doc = app.documents.add(
       UnitValue(${width}, 'px'),
       UnitValue(${height}, 'px'),
       ${resolution},
       'New Document',
-      ${jsxEnum(colorMode, NEW_DOCUMENT_MODES, "color mode")}
+      ${jsxEnum(colorMode, NEW_DOCUMENT_MODES, 'color mode')}
     );
     return { id: doc.id, name: doc.name };
   `,
@@ -636,7 +674,7 @@ export const ExtendScriptSnippets = {
     var doc = app.activeDocument;
     var layer = doc.activeLayer;
     
-    layer.blendMode = BlendMode.${jsxEnum(blendMode, BLEND_MODES, "blend mode")};
+    layer.blendMode = BlendMode.${jsxEnum(blendMode, BLEND_MODES, 'blend mode')};
     
     var result = { 
       updated: true,
@@ -835,7 +873,7 @@ export const ExtendScriptSnippets = {
       throw new Error('Can only apply filters to normal (raster) layers');
     }
     
-    var distEnum = NoiseDistribution.${jsxEnum(distribution, NOISE_DISTRIBUTIONS, "noise distribution")};
+    var distEnum = NoiseDistribution.${jsxEnum(distribution, NOISE_DISTRIBUTIONS, 'noise distribution')};
     layer.applyAddNoise(${amount}, distEnum, ${monochromatic});
     
     return { 
@@ -1102,7 +1140,7 @@ export const ExtendScriptSnippets = {
       throw new Error('Active layer is not a text layer');
     }
     
-    layer.textItem.justification = Justification.${jsxEnum(alignment, TEXT_JUSTIFICATIONS, "text alignment")};
+    layer.textItem.justification = Justification.${jsxEnum(alignment, TEXT_JUSTIFICATIONS, 'text alignment')};
     
     return { 
       alignment: ${jsxString(alignment)}
@@ -1279,7 +1317,8 @@ export const ExtendScriptSnippets = {
     const lastLine = lines[lines.length - 1].trim();
 
     // Add return if last line is an expression (not a statement like if/for/var/return/}/;)
-    const isStatement = /^(if|for|while|var|let|const|return|throw|try|catch|function|\/\/|\}|;$)/.test(lastLine);
+    const isStatement =
+      /^(if|for|while|var|let|const|return|throw|try|catch|function|\/\/|\}|;$)/.test(lastLine);
     if (!isStatement && !lastLine.startsWith('return ')) {
       lines[lines.length - 1] = 'return ' + lines[lines.length - 1];
     }
