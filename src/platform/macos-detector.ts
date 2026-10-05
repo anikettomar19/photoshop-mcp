@@ -1,10 +1,11 @@
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { access, constants, readFile } from 'fs/promises';
 import { Logger } from '../utils/logger.js';
 import { PhotoshopInfo } from './connection.js';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export class MacOSDetector {
   private logger: Logger;
@@ -160,11 +161,12 @@ export class MacOSDetector {
       // Get the app name from path
       const appName = appPath.split('/').pop()?.replace('.app', '') || 'Adobe Photoshop';
 
-      // Use pgrep to check if process is running
-      const { stdout } = await execAsync(`pgrep -f "${appName}"`);
-      return stdout.trim().length > 0;
+      // Ask AppleScript about this exact app: pgrep -f "Adobe Photoshop" also
+      // matches helper and crash-reporter processes.
+      const quoted = '"' + appName.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+      const { stdout } = await execFileAsync('osascript', ['-e', `application ${quoted} is running`]);
+      return stdout.trim() === 'true';
     } catch {
-      // pgrep returns non-zero exit code if no process found
       return false;
     }
   }

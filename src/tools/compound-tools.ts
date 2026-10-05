@@ -4,6 +4,7 @@ import { Jimp } from 'jimp';
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
+import { LONG_SCRIPT_TIMEOUT_MS } from '../platform/script-executor.js';
 import { layerPathResolver } from '../api/extendscript.js';
 import { computePhash, computeHsvHistogram, computeAlphaHash } from './sprite-hash.js';
 import {
@@ -295,7 +296,7 @@ async function prepUiForUnity(
 
     // ── 2. Get full layer tree with RT values in one ExtendScript call ────────
     const treeScript = scriptGetLayerTreeWithRT(scaleFactor, groupFilter);
-    const tree = (await api.executeScript(treeScript)) as {
+    const tree = (await api.executeScript(treeScript, LONG_SCRIPT_TIMEOUT_MS)) as {
       documentName: string;
       documentSize: { width: number; height: number };
       scaleFactor: number;
@@ -442,7 +443,7 @@ async function swapMockupAsset(
 
     // ── 2. Replace smart object content ──────────────────────────────────────
     const replaceScript = scriptReplaceSmartObject(smartObjectPath, newAssetPath, fitToLayer, saveAfter);
-    const replaceResult = (await api.executeScript(replaceScript)) as {
+    const replaceResult = (await api.executeScript(replaceScript, LONG_SCRIPT_TIMEOUT_MS)) as {
       replaced: boolean;
       layerName: string;       // NEW name Photoshop assigned (matches the asset filename)
       layerPath: string;

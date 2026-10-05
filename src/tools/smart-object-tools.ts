@@ -1,6 +1,7 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
+import { LONG_SCRIPT_TIMEOUT_MS } from '../platform/script-executor.js';
 import { layerPathResolver } from '../api/extendscript.js';
 import { requireString } from '../utils/args.js';
 import { jsxString } from '../utils/jsx.js';
@@ -236,7 +237,7 @@ async function listSmartObjects(connection: PhotoshopConnection): Promise<ToolRe
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);
     const api = await apiFactory.createAPI();
-    const result = await api.executeScript(scriptListSmartObjects());
+    const result = await api.executeScript(scriptListSmartObjects(), LONG_SCRIPT_TIMEOUT_MS);
 
     return {
       content: [
@@ -272,7 +273,7 @@ async function replaceSmartObject(
     const apiFactory = new PhotoshopAPIFactory(connection);
     const api = await apiFactory.createAPI();
     const script = scriptReplaceSmartObject(layerPath, newFilePath, fitToLayer, saveAfter);
-    const result = await api.executeScript(script);
+    const result = await api.executeScript(script, LONG_SCRIPT_TIMEOUT_MS);
 
     return {
       content: [

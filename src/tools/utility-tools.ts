@@ -1,6 +1,7 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
+import { LONG_SCRIPT_TIMEOUT_MS } from '../platform/script-executor.js';
 import { requireString, requireNumber } from '../utils/args.js';
 import { jsxString } from '../utils/jsx.js';
 
@@ -461,7 +462,7 @@ async function exportLayerAsPng(
         }
 
         return { ready: true, clipBase: clipBase ? clipBase.name : null };
-      `);
+      `, LONG_SCRIPT_TIMEOUT_MS);
 
       // Step 2: Copy Merged (composites visible layers respecting clip mask + shape)
       await api.executeScript(`
@@ -472,7 +473,7 @@ async function exportLayerAsPng(
         dupDoc.selection.selectAll();
         dupDoc.selection.copy(true);
         return { copied: true };
-      `);
+      `, LONG_SCRIPT_TIMEOUT_MS);
 
       // Step 3: Close dup doc, create new transparent doc, paste
       await api.executeScript(`
@@ -489,7 +490,7 @@ async function exportLayerAsPng(
         newDoc.paste();
         try { newDoc.selection.deselect(); } catch(e) {}
         return { pasted: true };
-      `);
+      `, LONG_SCRIPT_TIMEOUT_MS);
 
       // Step 4: Trim, save, close, return to original doc — all by name,
       // never via app.activeDocument (user focus changes between scripts).
@@ -521,7 +522,7 @@ async function exportLayerAsPng(
           trimmed: ${trim},
           clippingApplied: true
         };
-      `);
+      `, LONG_SCRIPT_TIMEOUT_MS);
 
       return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
 
@@ -567,7 +568,7 @@ async function exportLayerAsPng(
           trimmed: ${trim},
           clippingApplied: false
         };
-      `);
+      `, LONG_SCRIPT_TIMEOUT_MS);
       return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
     }
   } catch (error) {
@@ -834,7 +835,7 @@ export async function batchExportLayers(
       }
 
       return results.join('\\n');
-    `);
+    `, LONG_SCRIPT_TIMEOUT_MS);
 
     // Parse pipe-delimited results into structured JSON
     const resultStr = String(result);
