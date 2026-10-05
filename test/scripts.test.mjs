@@ -26,7 +26,8 @@ const ARGS = {
   newLayer: [NASTY],
   deleteLayer: [],
   fillLayer: [255, 0, 0],
-  resizeImage: [100, 100],
+  resizeImage: [100, undefined, 'BICUBICSHARPER'],
+  resizeCanvas: [undefined, 300, 'TOPLEFT'],
   getLayerNames: [],
   selectLayer: [NASTY],
   fitLayerToDocument: [true],
@@ -116,5 +117,7 @@ test('identifier arguments are validated, not spliced', () => {
   assert.throws(() => ExtendScriptSnippets.setLayerBlendMode('NORMAL; alert(1)'), /invalid blend mode/);
   assert.throws(() => ExtendScriptSnippets.setTextAlignment('MIDDLE'), /invalid text alignment/);
   assert.throws(() => ExtendScriptSnippets.applyAddNoise(1, 'PERLIN', false), /invalid noise distribution/);
+  assert.throws(() => ExtendScriptSnippets.resizeImage(10, 10, 'LANCZOS'), /invalid resample method/);
+  assert.throws(() => ExtendScriptSnippets.resizeCanvas(10, 10, 'CENTER'), /invalid anchor/);
   assert.equal(jsxEnum('A', ['A', 'B'], 'x'), 'A');
 });
