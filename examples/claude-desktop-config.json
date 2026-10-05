@@ -4,11 +4,10 @@
       "command": "npx",
       "args": [
         "-y",
-        "@anikettomar19/photoshop-mcp"
+        "github:anikettomar19/photoshop-mcp"
       ],
       "env": {
-        "LOG_LEVEL": "0",
-        "PHOTOSHOP_PATH": "/Applications/Adobe Photoshop 2024/Adobe Photoshop 2024.app"
+        "LOG_LEVEL": "1"
       }
     }
   }
