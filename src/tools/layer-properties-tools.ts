@@ -85,13 +85,21 @@ export function createLayerPropertiesTools(connection: PhotoshopConnection): Too
     {
       tool: {
         name: 'photoshop_set_layer_visibility',
-        description: 'Show or hide the active layer',
+        description:
+          'Show or hide a layer. Targets the layer at "path" when given, otherwise the active layer. ' +
+          'Prefer passing "path" — toggling the active layer mutates whatever the user last clicked.',
         inputSchema: {
           type: 'object',
           properties: {
             visible: {
               type: 'boolean',
               description: 'Whether the layer should be visible',
+            },
+            path: {
+              type: 'string',
+              description:
+                'Optional layer path, e.g. "Tier/Group 1050". Append [n] to a segment to pick between ' +
+                'identically named siblings. Omit to act on the active layer.',
             },
           },
           required: ['visible'],
@@ -247,12 +255,13 @@ async function setLayerVisibility(
   args: Record<string, unknown>
 ): Promise<ToolResult> {
   const visible = args.visible as boolean;
+  const path = typeof args.path === 'string' && args.path !== '' ? args.path : undefined;
 
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);
     const api = await apiFactory.createAPI();
 
-    const script = ExtendScriptSnippets.setLayerVisibility(visible);
+    const script = ExtendScriptSnippets.setLayerVisibility(visible, path);
     await api.executeScript(script);
 
     return {

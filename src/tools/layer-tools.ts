@@ -114,13 +114,27 @@ export function createLayerTools(connection: PhotoshopConnection): ToolDefinitio
           'Get the full layer hierarchy of the active document, including all nested groups, ' +
           'text content/font/color/size, bounds (position and size in px), blend mode, opacity, ' +
           'visibility, and smart object flags. Use this to understand the complete PSD structure ' +
-          'before recreating UI in Unity.',
+          'before recreating UI in Unity. On large documents walking the whole tree can exceed the ' +
+          'script timeout — pass "path" to walk only one subtree and/or "max_depth" to cap the levels ' +
+          'returned. Groups cut off by max_depth report childCount and truncated:true.',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            path: {
+              type: 'string',
+              description:
+                'Optional group path to walk from, e.g. "Pages/1/BG2". Omit to walk the whole document. ' +
+                'Append [n] to a segment to pick between identically named siblings, e.g. "Pages/1[0]".',
+            },
+            max_depth: {
+              type: 'number',
+              description:
+                'Optional cap on how many levels to return (1 = only the immediate children). Omit for unlimited.',
+            },
+          },
         },
       },
-      handler: async () => getLayerTree(connection),
+      handler: async (args) => getLayerTree(connection, args),
     },
     {
       tool: {
@@ -325,12 +339,17 @@ async function getLayers(connection: PhotoshopConnection): Promise<ToolResult> {
   }
 }
 
-async function getLayerTree(connection: PhotoshopConnection): Promise<ToolResult> {
+async function getLayerTree(
+  connection: PhotoshopConnection,
+  args?: Record<string, unknown>
+): Promise<ToolResult> {
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);
     const api = await apiFactory.createAPI();
 
-    const script = ExtendScriptSnippets.getLayerTree();
+    const path = typeof args?.path === 'string' ? args.path : undefined;
+    const maxDepth = typeof args?.max_depth === 'number' ? args.max_depth : undefined;
+    const script = ExtendScriptSnippets.getLayerTree(path, maxDepth);
     const result = await api.executeScript(script);
 
     return {

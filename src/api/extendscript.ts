@@ -64,6 +64,79 @@ function getContextInfo() {
 `;
 
 /**
+ * Resolves a "Group/Sub/Layer" path to a layer.
+ *
+ * Two behaviours that the previous inline walks got wrong:
+ *  - a missing segment now reports the sibling names actually present, so a
+ *    name mismatch is distinguishable from a wrong hierarchy;
+ *  - identically named siblings are an error rather than a silent first match,
+ *    which used to export art from the wrong layer with no warning. Pass an
+ *    explicit 0-based index to pick one: "Group[1]/Layer".
+ */
+export const layerPathResolver = `
+function psSiblingNames(collection) {
+  var names = [];
+  for (var i = 0; i < collection.length; i++) {
+    names.push('"' + collection[i].name + '"' + (collection[i].typename === "LayerSet" ? "/" : ""));
+  }
+  return names.length ? names.join(", ") : "(none)";
+}
+
+function psResolveLayerPath(doc, path) {
+  var parts = path.split('/');
+  var collection = doc.layers;
+  var layer = null;
+
+  for (var p = 0; p < parts.length; p++) {
+    var seg = parts[p];
+    var want = -1;
+    var m = seg.match(/^(.*)\\[(\\d+)\\]$/);
+    if (m) { seg = m[1]; want = parseInt(m[2], 10); }
+
+    var matches = [];
+    for (var i = 0; i < collection.length; i++) {
+      if (collection[i].name === seg) { matches.push(collection[i]); }
+    }
+
+    if (matches.length === 0) {
+      throw new Error(
+        'Layer not found at path segment: "' + seg + '" (under "' +
+        (p === 0 ? "<document>" : parts.slice(0, p).join('/')) +
+        '"). Siblings here: ' + psSiblingNames(collection)
+      );
+    }
+
+    if (want >= 0) {
+      if (want >= matches.length) {
+        throw new Error(
+          'Path segment "' + seg + '[' + want + ']" is out of range: only ' +
+          matches.length + ' sibling(s) named "' + seg + '"'
+        );
+      }
+      layer = matches[want];
+    } else if (matches.length > 1) {
+      throw new Error(
+        'Path segment "' + seg + '" is ambiguous: ' + matches.length +
+        ' siblings share that name. Disambiguate with "' + seg + '[0]" through "' +
+        seg + '[' + (matches.length - 1) + ']"'
+      );
+    } else {
+      layer = matches[0];
+    }
+
+    if (p < parts.length - 1) {
+      if (layer.typename !== "LayerSet") {
+        throw new Error('Layer "' + seg + '" is not a group');
+      }
+      collection = layer.layers;
+    }
+  }
+
+  return layer;
+}
+`;
+
+/**
  * Common ExtendScript snippets
  */
 export const ExtendScriptSnippets = {
@@ -554,18 +627,21 @@ export const ExtendScriptSnippets = {
   /**
    * Set layer visibility
    */
-  setLayerVisibility: (visible: boolean) => `
+  setLayerVisibility: (visible: boolean, path?: string) => `
+    ${layerPathResolver}
     if (app.documents.length === 0) {
       throw new Error('No active document');
     }
     var doc = app.activeDocument;
-    var layer = doc.activeLayer;
-    
+    var targetPath = "${(path ?? '').replace(/"/g, '\\"')}";
+    var layer = targetPath === "" ? doc.activeLayer : psResolveLayerPath(doc, targetPath);
+
     layer.visible = ${visible};
-    
-    return { 
+
+    return {
       visible: layer.visible,
-      name: layer.name
+      name: layer.name,
+      target: targetPath === "" ? "activeLayer" : targetPath
     };
   `,
 
@@ -1480,11 +1556,13 @@ export const ExtendScriptSnippets = {
    * Returns the complete hierarchy including groups, nested layers,
    * text properties, bounds, and smart object flags.
    */
-  getLayerTree: () => `
+  getLayerTree: (rootPath?: string, maxDepth?: number) => `
+    ${layerPathResolver}
     if (app.documents.length === 0) {
       throw new Error('No active document');
     }
     var doc = app.activeDocument;
+    var maxDepth = ${typeof maxDepth === 'number' && maxDepth > 0 ? maxDepth : -1};
 
     function collectLayers(layerCollection, depth) {
       var result = [];
@@ -1542,9 +1620,16 @@ export const ExtendScriptSnippets = {
           layerInfo.isSmartObject = true;
         }
 
-        // Recurse into groups
+        // Recurse into groups, unless the depth cap stops us here. A truncated
+        // group reports its child count so a clipped walk is never mistaken
+        // for an empty group.
         if (isGroup) {
-          layerInfo.children = collectLayers(layer.layers, depth + 1);
+          if (maxDepth > 0 && (depth + 1) >= maxDepth) {
+            layerInfo.childCount = layer.layers.length;
+            layerInfo.truncated = true;
+          } else {
+            layerInfo.children = collectLayers(layer.layers, depth + 1);
+          }
         }
 
         result.push(layerInfo);
@@ -1552,11 +1637,23 @@ export const ExtendScriptSnippets = {
       return result;
     }
 
+    var rootPath = "${(rootPath ?? '').replace(/"/g, '\\"')}";
+    var rootCollection = doc.layers;
+    if (rootPath !== "") {
+      var rootLayer = psResolveLayerPath(doc, rootPath);
+      if (rootLayer.typename !== "LayerSet") {
+        throw new Error('Layer "' + rootPath + '" is not a group, so it has no subtree');
+      }
+      rootCollection = rootLayer.layers;
+    }
+
     return {
       documentName: doc.name,
       width:  Math.round(doc.width.as('px')),
       height: Math.round(doc.height.as('px')),
-      layers: collectLayers(doc.layers, 0)
+      root: rootPath === "" ? null : rootPath,
+      maxDepth: maxDepth > 0 ? maxDepth : null,
+      layers: collectLayers(rootCollection, 0)
     };
   `,
 
@@ -1566,33 +1663,12 @@ export const ExtendScriptSnippets = {
    * Also supports flat layer name (no slash).
    */
   selectLayerByPath: (path: string) => `
+    ${layerPathResolver}
     if (app.documents.length === 0) {
       throw new Error('No active document');
     }
     var doc = app.activeDocument;
-    var parts = "${path.replace(/"/g, '\\"')}".split('/');
-    var collection = doc.layers;
-    var layer = null;
-
-    for (var p = 0; p < parts.length; p++) {
-      var found = false;
-      for (var i = 0; i < collection.length; i++) {
-        if (collection[i].name === parts[p]) {
-          layer = collection[i];
-          found = true;
-          if (p < parts.length - 1) {
-            if (layer.typename !== "LayerSet") {
-              throw new Error('Layer "' + parts[p] + '" is not a group');
-            }
-            collection = layer.layers;
-          }
-          break;
-        }
-      }
-      if (!found) {
-        throw new Error('Layer not found at path segment: ' + parts[p]);
-      }
-    }
+    var layer = psResolveLayerPath(doc, "${path.replace(/"/g, '\\"')}");
 
     doc.activeLayer = layer;
     return {
@@ -1626,35 +1702,13 @@ export const ExtendScriptSnippets = {
    * Y is negated to convert from PSD (Y-down) to Unity (Y-up) coordinate space.
    */
   getLayerRT: (layerPath: string, scaleFactor: number) => `
+    ${layerPathResolver}
     if (app.documents.length === 0) {
       throw new Error('No active document');
     }
     var doc = app.activeDocument;
 
-    // Navigate to layer by path
-    var parts = "${layerPath.replace(/"/g, '\\"')}".split('/');
-    var collection = doc.layers;
-    var layer = null;
-
-    for (var p = 0; p < parts.length; p++) {
-      var found = false;
-      for (var i = 0; i < collection.length; i++) {
-        if (collection[i].name === parts[p]) {
-          layer = collection[i];
-          found = true;
-          if (p < parts.length - 1) {
-            if (layer.typename !== "LayerSet") {
-              throw new Error('Layer "' + parts[p] + '" is not a group');
-            }
-            collection = layer.layers;
-          }
-          break;
-        }
-      }
-      if (!found) {
-        throw new Error('Layer not found at path segment: ' + parts[p]);
-      }
-    }
+    var layer = psResolveLayerPath(doc, "${layerPath.replace(/"/g, '\\"')}");
 
     var sf = ${scaleFactor};
 

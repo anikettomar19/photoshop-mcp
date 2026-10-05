@@ -1,6 +1,7 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
+import { layerPathResolver } from '../api/extendscript.js';
 import { requireString } from '../utils/args.js';
 
 export function createSmartObjectTools(connection: PhotoshopConnection): ToolDefinition[] {
@@ -126,6 +127,7 @@ export function scriptReplaceSmartObject(
   return `
     function cTID(s) { return app.charIDToTypeID(s); }
     function sTID(s) { return app.stringIDToTypeID(s); }
+    ${layerPathResolver}
 
     if (app.documents.length === 0) {
       throw new Error('No active document');
@@ -133,29 +135,7 @@ export function scriptReplaceSmartObject(
     var doc = app.activeDocument;
 
     // ── Navigate to layer by path ──────────────────────────────────────────
-    var parts = "${escapedPath}".split('/');
-    var collection = doc.layers;
-    var layer = null;
-
-    for (var p = 0; p < parts.length; p++) {
-      var found = false;
-      for (var i = 0; i < collection.length; i++) {
-        if (collection[i].name === parts[p]) {
-          layer = collection[i];
-          found = true;
-          if (p < parts.length - 1) {
-            if (layer.typename !== 'LayerSet') {
-              throw new Error('Layer "' + parts[p] + '" is not a group');
-            }
-            collection = layer.layers;
-          }
-          break;
-        }
-      }
-      if (!found) {
-        throw new Error('Layer not found at path segment: "' + parts[p] + '"');
-      }
-    }
+    var layer = psResolveLayerPath(doc, "${escapedPath}");
 
     // ── Validate smart object ──────────────────────────────────────────────
     if (layer.kind !== LayerKind.SMARTOBJECT) {
