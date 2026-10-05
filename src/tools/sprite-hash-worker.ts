@@ -4,6 +4,7 @@ import {
   computePhash,
   computeHsvHistogram,
   computeAlphaHash,
+  computeContentHash,
   computeNineSliceGeom,
   readSpriteBorder,
 } from './sprite-hash.js';
@@ -42,6 +43,7 @@ for (const job of jobs) {
       phash: computePhash(img),
       hsvHist: computeHsvHistogram(img),
       alphaHash: computeAlphaHash(img),
+      contentHash: computeContentHash(img),
     };
     const border = readSpriteBorder(job.absPath);
     if (border) {
