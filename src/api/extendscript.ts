@@ -390,8 +390,15 @@ export const ExtendScriptSnippets = {
     color.rgb.red = ${red};
     color.rgb.green = ${green};
     color.rgb.blue = ${blue};
-    doc.activeLayer.fillPath(color);
-    return { filled: true };
+    // Layers have no fill method (fillPath, used before, does not exist), so
+    // fill through the selection like Edit > Fill does: an existing selection
+    // is filled and kept, otherwise the whole layer is filled.
+    var hadSelection = false;
+    try { hadSelection = !!doc.selection.bounds; } catch (e) {}
+    if (!hadSelection) doc.selection.selectAll();
+    doc.selection.fill(color);
+    if (!hadSelection) doc.selection.deselect();
+    return { filled: true, scope: hadSelection ? 'selection' : 'layer' };
   `,
 
   /**
@@ -892,21 +899,46 @@ export const ExtendScriptSnippets = {
   /**
    * Adjust hue and saturation
    */
-  adjustHueSaturation: (hue: number, saturation: number, lightness: number) => `
+  adjustHueSaturation: (hue: number, saturation: number, lightness: number) => {
+    // The Hue/Saturation dialog only takes integers in these ranges; anything
+    // else makes executeAction fail with a generic "not available" error.
+    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(v)));
+    const h = clamp(hue, -180, 180);
+    const s = clamp(saturation, -100, 100);
+    const l = clamp(lightness, -100, 100);
+    // The DOM has no Hue/Saturation method (adjustColorBalance, used before,
+    // is Color Balance), so this replays the action the dialog records.
+    return `
+    ${helperFunctions}
     if (app.documents.length === 0) {
       throw new Error('No active document');
     }
     var layer = app.activeDocument.activeLayer;
-    
-    layer.adjustColorBalance([${hue}], [${saturation}], [${lightness}]);
-    
-    return { 
+    if (layer.kind !== LayerKind.NORMAL) {
+      throw new Error('Hue/Saturation needs a pixel layer; active layer is ' + String(layer.kind));
+    }
+
+    var adj = new ActionDescriptor();
+    adj.putInteger(cTID('H   '), ${h});
+    adj.putInteger(cTID('Strt'), ${s});
+    adj.putInteger(cTID('Lght'), ${l});
+    var adjList = new ActionList();
+    adjList.putObject(cTID('Hst2'), adj);
+
+    var desc = new ActionDescriptor();
+    desc.putEnumerated(sTID('presetKind'), sTID('presetKindType'), sTID('presetKindCustom'));
+    desc.putBoolean(cTID('Clrz'), false);
+    desc.putList(cTID('Adjs'), adjList);
+    executeAction(cTID('HStr'), desc, DialogModes.NO);
+
+    return {
       adjustment: 'Hue/Saturation',
-      hue: ${hue},
-      saturation: ${saturation},
-      lightness: ${lightness}
+      hue: ${h},
+      saturation: ${s},
+      lightness: ${l}
     };
-  `,
+  `;
+  },
 
   /**
    * Auto levels adjustment
