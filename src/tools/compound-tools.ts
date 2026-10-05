@@ -6,7 +6,12 @@ import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { LONG_SCRIPT_TIMEOUT_MS } from '../platform/script-executor.js';
 import { layerPathResolver } from '../api/extendscript.js';
-import { computePhash, computeHsvHistogram, computeAlphaHash } from './sprite-hash.js';
+import {
+  computePhash,
+  computeHsvHistogram,
+  computeAlphaHash,
+  computeContentHash,
+} from './sprite-hash.js';
 import {
   SpriteEntry,
   loadIndex,
@@ -180,6 +185,7 @@ async function hashAndAddToIndex(
     phash: computePhash(img),
     hsvHist: computeHsvHistogram(img),
     alphaHash: computeAlphaHash(img),
+    contentHash: computeContentHash(img),
   };
   const sprites = loadIndex(indexPath);
   const rel = relative(projectRoot, pngPath);

@@ -29,12 +29,17 @@ export interface SpriteEntry {
   spriteBorder?: [number, number, number, number]; // [x,y,z,w] from .meta (9-slice only)
   corner_radius?: number; // 9-slice geometry (only present when spriteBorder is set)
   dominant_color?: number[] | null;
+  contentHash?: string; // SHA-1 of raw RGBA bytes — exact-identity key for dedup
+  duplicatePaths?: string[]; // other folders holding byte/visually-identical art (dedup)
 }
 
 interface IndexFile {
   version: number;
   indexedAt: string;
   sprites: Record<string, SpriteEntry>;
+  // Full entries for the non-canonical copies dedup folded away. Search never
+  // reads these; rebuild reuses them so unchanged copies aren't re-decoded.
+  duplicates?: Record<string, SpriteEntry>;
 }
 
 interface CatalogEntry {
@@ -228,9 +233,26 @@ export function loadIndex(indexPath: string): Record<string, SpriteEntry> {
   }
 }
 
-export function saveIndex(indexPath: string, sprites: Record<string, SpriteEntry>): void {
+function loadIndexDuplicates(indexPath: string): Record<string, SpriteEntry> {
+  if (!existsSync(indexPath)) return {};
+  try {
+    return (JSON.parse(readFileSync(indexPath, 'utf8')) as IndexFile).duplicates ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Writes the index. `duplicates` defaults to whatever the file already holds,
+ * so callers that only edit `sprites` (load, tweak, save) don't drop them.
+ */
+export function saveIndex(
+  indexPath: string,
+  sprites: Record<string, SpriteEntry>,
+  duplicates: Record<string, SpriteEntry> = loadIndexDuplicates(indexPath)
+): void {
   mkdirSync(join(indexPath, '..'), { recursive: true });
-  const data: IndexFile = { version: 1, indexedAt: new Date().toISOString(), sprites };
+  const data: IndexFile = { version: 1, indexedAt: new Date().toISOString(), sprites, duplicates };
   writeFileSync(indexPath, JSON.stringify(data));
 }
 
@@ -546,11 +568,77 @@ async function runHashWorkers(jobs: HashJob[]): Promise<WorkerResult> {
   return merged;
 }
 
+// Extra roots folded into the VISUAL index on top of Assets/Sprites: real game
+// art under Assets/Resources, plus the legacy Assets/Resources_moved staging
+// folder. Content-dedup (below) collapses any Resources_moved sprite that is a
+// byte-copy of a live one into the live canonical, so only genuinely-unique
+// legacy art becomes a new searchable entry. Third-party plugin folders (Feel,
+// Epic Toon FX, GoogleMobileAds…) are still excluded as pure noise.
+const INDEX_EXTRA_ROOTS = ['Assets/Resources', 'Assets/Resources_moved'];
+
+interface DupGroup {
+  canonical: string;
+  duplicates: string[];
+}
+
+/**
+ * Collapse byte-identical sprites living in different folders to ONE canonical
+ * entry, recording the others under `duplicatePaths`. Two entries are
+ * duplicates only when their contentHash (SHA-1 of the decoded RGBA pixels)
+ * matches. Canonical prefers an Assets/Sprites path, then the shortest. This
+ * lets find_similar tally a repeated image ONCE instead of returning the same
+ * art from several folders.
+ */
+function dedupeByContent(sprites: Record<string, SpriteEntry>): {
+  deduped: Record<string, SpriteEntry>;
+  duplicates: Record<string, SpriteEntry>;
+  duplicateGroups: DupGroup[];
+} {
+  const byKey = new Map<string, string[]>();
+  for (const [rel, e] of Object.entries(sprites)) {
+    // Exact pixel identity only. An entry without a contentHash (e.g. carried
+    // over from a pre-dedup index) gets a unique key so it is never merged.
+    const key = e.contentHash ?? `nohash:${rel}`;
+    const arr = byKey.get(key);
+    if (arr) arr.push(rel);
+    else byKey.set(key, [rel]);
+  }
+  const deduped: Record<string, SpriteEntry> = {};
+  const duplicates: Record<string, SpriteEntry> = {};
+  const duplicateGroups: DupGroup[] = [];
+  for (const paths of byKey.values()) {
+    const canonical = paths.slice().sort((a, b) => {
+      const aS = a.startsWith('Assets/Sprites') ? 0 : 1;
+      const bS = b.startsWith('Assets/Sprites') ? 0 : 1;
+      return aS - bS || a.length - b.length || a.localeCompare(b);
+    })[0];
+    const entry: SpriteEntry = { ...sprites[canonical] };
+    delete entry.duplicatePaths; // clear any stale field from a prior build
+    const dups = paths.filter((p) => p !== canonical).sort();
+    if (dups.length) {
+      entry.duplicatePaths = dups;
+      duplicateGroups.push({ canonical, duplicates: dups });
+      for (const d of dups) {
+        const copy: SpriteEntry = { ...sprites[d] };
+        delete copy.duplicatePaths;
+        duplicates[d] = copy;
+      }
+    }
+    deduped[canonical] = entry;
+  }
+  return { deduped, duplicates, duplicateGroups };
+}
+
 export async function rebuildSpriteIndex(args: Record<string, unknown>): Promise<ToolResult> {
   try {
     const { projectRoot, spritesRoot, indexPath, nineSliceIndexPath } = getProjectPaths(args);
-    const existing = loadIndex(indexPath);
-    const allPaths = walkDir(spritesRoot);
+    // Previously folded-away copies are reusable too, or every rebuild would
+    // re-decode them as if they were new.
+    const existing = { ...loadIndexDuplicates(indexPath), ...loadIndex(indexPath) };
+    // Cold build scans Assets/Sprites + the extra roots; dedup (below) keeps the
+    // searchable set one-entry-per-image, so search isn't widened with copies.
+    const indexRoots = [spritesRoot, ...INDEX_EXTRA_ROOTS.map((r) => join(projectRoot, r))];
+    const allPaths = indexRoots.flatMap((r) => (existsSync(r) ? walkDir(r) : []));
 
     let indexed = 0,
       updated = 0,
@@ -570,7 +658,9 @@ export async function rebuildSpriteIndex(args: Record<string, unknown>): Promise
       }
 
       const prev = existing[rel];
-      if (prev && Math.abs(prev.mtime - mtime) < 500) {
+      // An entry without contentHash predates dedup: rehash it once, or it
+      // could never be matched against its copies.
+      if (prev && prev.contentHash && Math.abs(prev.mtime - mtime) < 500) {
         sprites[rel] = prev; // copy unchanged entry
         skipped++;
         continue;
@@ -587,12 +677,17 @@ export async function rebuildSpriteIndex(args: Record<string, unknown>): Promise
     }
     errors.push(...workerErrors);
 
-    saveIndex(indexPath, sprites);
-    // Build the nine-slice index in the same pass (covers Assets/Sprites + the
-    // extra roots nine_slice_matcher.py scans).
-    const nineSliceList = await collectNineSliceSprites(projectRoot, sprites);
+    // Content-dedup: identical art across folders collapses to ONE canonical
+    // entry (tallied once), with the other locations recorded on it. Search then
+    // returns one hit per unique image instead of the same art from N folders.
+    const { deduped, duplicates, duplicateGroups } = dedupeByContent(sprites);
+    saveIndex(indexPath, deduped, duplicates);
+    // Build the nine-slice index from the deduped set (covers Assets/Sprites +
+    // the extra roots nine_slice_matcher.py scans).
+    const nineSliceList = await collectNineSliceSprites(projectRoot, deduped);
     writeNineSliceIndex(nineSliceIndexPath, nineSliceList);
     const nineSliceCount = nineSliceList.length;
+    const duplicateFiles = duplicateGroups.reduce((s, g) => s + g.duplicates.length, 0);
     return {
       content: [
         {
@@ -600,9 +695,13 @@ export async function rebuildSpriteIndex(args: Record<string, unknown>): Promise
           text: JSON.stringify(
             {
               total_sprites: allPaths.length,
+              unique_sprites: Object.keys(deduped).length,
               newly_indexed: indexed,
               updated,
               skipped_unchanged: skipped,
+              duplicate_groups: duplicateGroups.length,
+              duplicate_files_collapsed: duplicateFiles,
+              duplicates_sample: duplicateGroups.slice(0, 15),
               nine_slice_sprites: nineSliceCount,
               errors,
               index_path: indexPath,
