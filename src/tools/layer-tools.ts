@@ -2,6 +2,7 @@ import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { LONG_SCRIPT_TIMEOUT_MS } from '../platform/script-executor.js';
+import { formatLayerTree, LayerTree } from './layer-tree-format.js';
 import { ExtendScriptSnippets } from '../api/extendscript.js';
 import { requireString } from '../utils/args.js';
 
@@ -113,12 +114,12 @@ export function createLayerTools(connection: PhotoshopConnection): ToolDefinitio
       tool: {
         name: 'photoshop_get_layer_tree',
         description:
-          'Get the full layer hierarchy of the active document, including all nested groups, ' +
+          'Get the layer hierarchy of the active document, including nested groups, ' +
           'text content/font/color/size, bounds (position and size in px), blend mode, opacity, ' +
-          'visibility, and smart object flags. Use this to understand the complete PSD structure ' +
-          'before recreating UI in Unity. On large documents walking the whole tree can exceed the ' +
-          'script timeout — pass "path" to walk only one subtree and/or "max_depth" to cap the levels ' +
-          'returned. Groups cut off by max_depth report childCount and truncated:true.',
+          'visibility, and smart object flags. Use this to understand the PSD structure ' +
+          'before recreating UI in Unity. Output is compact JSON (see its "legend"); pass detail:"full" ' +
+          'for the long field names. Large documents are cut to the deepest level that fits, with a ' +
+          '"note" saying so — then pass "path" to walk one group, or "max_depth" to choose the depth.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -132,6 +133,12 @@ export function createLayerTools(connection: PhotoshopConnection): ToolDefinitio
               type: 'number',
               description:
                 'Optional cap on how many levels to return (1 = only the immediate children). Omit for unlimited.',
+            },
+            detail: {
+              type: 'string',
+              enum: ['compact', 'full'],
+              description:
+                'compact (default): short keys, defaults omitted. full: every field with long names (about 3x larger).',
             },
           },
         },
@@ -351,14 +358,18 @@ async function getLayerTree(
 
     const path = typeof args?.path === 'string' ? args.path : undefined;
     const maxDepth = typeof args?.max_depth === 'number' ? args.max_depth : undefined;
+    const compact = args?.detail !== 'full';
     const script = ExtendScriptSnippets.getLayerTree(path, maxDepth);
     const result = await api.executeScript(script, LONG_SCRIPT_TIMEOUT_MS);
+    if (typeof result !== 'object' || result === null) {
+      throw new Error(`unexpected layer tree result: ${String(result).slice(0, 200)}`);
+    }
 
     return {
       content: [
         {
           type: 'text' as const,
-          text: `Layer Tree:\n${JSON.stringify(result, null, 2)}`,
+          text: formatLayerTree(result as LayerTree, { compact }),
         },
       ],
     };

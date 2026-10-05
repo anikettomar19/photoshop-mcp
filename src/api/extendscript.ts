@@ -187,6 +187,41 @@ function psResolveLayerPath(doc, path) {
 `;
 
 /**
+ * JSON.stringify for ExtendScript, which has no JSON object. toSource() (what
+ * results are otherwise sent as) leaves raw line breaks inside strings, so text
+ * layers containing a newline made the whole result unparseable.
+ */
+export const jsonStringifyHelper = `
+function psJSON(v) {
+  if (v === null || v === undefined) return 'null';
+  var t = typeof v;
+  if (t === 'number') return isFinite(v) ? String(v) : 'null';
+  if (t === 'boolean') return v ? 'true' : 'false';
+  if (t === 'string') {
+    var out = '"';
+    for (var i = 0; i < v.length; i++) {
+      var c = v.charAt(i), code = v.charCodeAt(i);
+      if (c === '"' || c === '\\\\') out += '\\\\' + c;
+      else if (c === '\\n') out += '\\\\n';
+      else if (c === '\\r') out += '\\\\r';
+      else if (c === '\\t') out += '\\\\t';
+      else if (code < 32 || code === 0x2028 || code === 0x2029) out += '\\\\u' + ('000' + code.toString(16)).slice(-4);
+      else out += c;
+    }
+    return out + '"';
+  }
+  if (v instanceof Array) {
+    var a = [];
+    for (var j = 0; j < v.length; j++) a.push(psJSON(v[j]));
+    return '[' + a.join(',') + ']';
+  }
+  var parts = [];
+  for (var k in v) if (v.hasOwnProperty(k) && typeof v[k] !== 'function') parts.push(psJSON(k) + ':' + psJSON(v[k]));
+  return '{' + parts.join(',') + '}';
+}
+`;
+
+/**
  * Common ExtendScript snippets
  */
 export const ExtendScriptSnippets = {
@@ -1646,103 +1681,204 @@ export const ExtendScriptSnippets = {
    */
   getLayerTree: (rootPath?: string, maxDepth?: number) => `
     ${layerPathResolver}
+    ${jsonStringifyHelper}
     if (app.documents.length === 0) {
       throw new Error('No active document');
     }
     var doc = app.activeDocument;
     var maxDepth = ${typeof maxDepth === 'number' && maxDepth > 0 ? maxDepth : -1};
+    var rootPath = ${jsxString(rootPath ?? '')};
 
-    function collectLayers(layerCollection, depth) {
-      var result = [];
-      for (var i = 0; i < layerCollection.length; i++) {
-        var layer = layerCollection[i];
-        var isGroup = (layer.typename === "LayerSet");
+    // Walks the layer list through ActionManager, one flat pass by index, and
+    // rebuilds the tree from the group start/end markers. The previous DOM
+    // walk (layer.layers[i], .bounds, .kind, .textItem ...) cost a scripting
+    // round trip per property and did not finish within 15 minutes on a real
+    // UI document. Layers outside the requested subtree, or below max_depth,
+    // only have their section marker and ID read.
+    function cTID(s) { return app.charIDToTypeID(s); }
+    function sTID(s) { return app.stringIDToTypeID(s); }
+    function tSID(t) { return app.typeIDToStringID(t); }
 
-        var layerInfo = {
-          name: layer.name,
-          type: isGroup ? "GROUP" : String(layer.kind),
-          visible: layer.visible,
-          opacity: layer.opacity,
-          blendMode: String(layer.blendMode),
-          depth: depth
-        };
-
-        // Bounds
-        try {
-          var b = layer.bounds;
-          layerInfo.bounds = {
-            left:   Math.round(b[0].as('px')),
-            top:    Math.round(b[1].as('px')),
-            right:  Math.round(b[2].as('px')),
-            bottom: Math.round(b[3].as('px')),
-            width:  Math.round(b[2].as('px') - b[0].as('px')),
-            height: Math.round(b[3].as('px') - b[1].as('px'))
-          };
-        } catch (e) {
-          layerInfo.bounds = null;
-        }
-
-        // Text layer details
-        if (!isGroup && layer.kind === LayerKind.TEXT) {
-          try {
-            var ti = layer.textItem;
-            var tc = ti.color;
-            layerInfo.text = {
-              content:   ti.contents,
-              font:      ti.font,
-              size:      ti.size.as('pt'),
-              color: {
-                r: Math.round(tc.rgb.red),
-                g: Math.round(tc.rgb.green),
-                b: Math.round(tc.rgb.blue)
-              },
-              alignment: String(ti.justification)
-            };
-          } catch (e) {
-            layerInfo.text = null;
-          }
-        }
-
-        // Smart object flag
-        if (!isGroup && layer.kind === LayerKind.SMARTOBJECT) {
-          layerInfo.isSmartObject = true;
-        }
-
-        // Recurse into groups, unless the depth cap stops us here. A truncated
-        // group reports its child count so a clipped walk is never mistaken
-        // for an empty group.
-        if (isGroup) {
-          if (maxDepth > 0 && (depth + 1) >= maxDepth) {
-            layerInfo.childCount = layer.layers.length;
-            layerInfo.truncated = true;
-          } else {
-            layerInfo.children = collectLayers(layer.layers, depth + 1);
-          }
-        }
-
-        result.push(layerInfo);
-      }
-      return result;
+    function layerRef(index, prop) {
+      var r = new ActionReference();
+      if (prop) r.putProperty(cTID('Prpr'), sTID(prop));
+      r.putIndex(cTID('Lyr '), index);
+      return r;
+    }
+    function getProp(index, prop) {
+      try { return executeActionGet(layerRef(index, prop)); } catch (e) { return null; }
     }
 
-    var rootPath = ${jsxString(rootPath ?? '')};
-    var rootCollection = doc.layers;
-    if (rootPath !== "") {
+    var docRef = new ActionReference();
+    docRef.putEnumerated(cTID('Dcmn'), cTID('Ordn'), cTID('Trgt'));
+    var layerCount = executeActionGet(docRef).getInteger(sTID('numberOfLayers'));
+
+    // Index 0 exists only when the document has a Background layer.
+    var firstIndex = getProp(0, 'layerID') ? 0 : 1;
+
+    var KINDS = { 1: 'LayerKind.NORMAL', 2: 'LayerKind.ADJUSTMENT', 3: 'LayerKind.TEXT',
+                  4: 'LayerKind.SOLIDFILL', 5: 'LayerKind.SMARTOBJECT', 6: 'LayerKind.VIDEO',
+                  7: 'GROUP', 8: 'LayerKind.3D', 9: 'LayerKind.GRADIENTFILL',
+                  10: 'LayerKind.PATTERNFILL', 11: 'LayerKind.SOLIDFILL', 12: 'LayerKind.NORMAL' };
+    var ALIGN = { left: 'Justification.LEFT', center: 'Justification.CENTER', right: 'Justification.RIGHT',
+                  justifyLeft: 'Justification.LEFTJUSTIFIED', justifyCenter: 'Justification.CENTERJUSTIFIED',
+                  justifyRight: 'Justification.RIGHTJUSTIFIED', justifyAll: 'Justification.FULLYJUSTIFIED' };
+
+    function px(d, key) { return Math.round(d.getUnitDoubleValue(sTID(key))); }
+
+    function readText(d) {
+      try {
+        var tk = d.getObjectValue(sTID('textKey'));
+        var info = { content: tk.getString(cTID('Txt ')), font: null, size: null, color: null, alignment: null };
+        var scale = 1;
+        try { scale = tk.getObjectValue(sTID('transform')).getDouble(sTID('yy')); } catch (e) {}
+        try {
+          var st = tk.getList(sTID('textStyleRange')).getObjectValue(0).getObjectValue(sTID('textStyle'));
+          try { info.font = st.getString(sTID('fontPostScriptName')); } catch (e) {}
+          try {
+            var sz = st.hasKey(sTID('impliedFontSize')) ? st.getUnitDoubleValue(sTID('impliedFontSize'))
+                                                         : st.getUnitDoubleValue(sTID('size')) * scale;
+            info.size = Math.round(sz * 100) / 100;
+          } catch (e) {}
+          try {
+            var c = st.getObjectValue(sTID('color'));
+            info.color = { r: Math.round(c.getDouble(cTID('Rd  '))), g: Math.round(c.getDouble(cTID('Grn '))),
+                           b: Math.round(c.getDouble(cTID('Bl  '))) };
+          } catch (e) {}
+        } catch (e) {}
+        try {
+          var ps = tk.getList(sTID('paragraphStyleRange')).getObjectValue(0).getObjectValue(sTID('paragraphStyle'));
+          var a = tSID(ps.getEnumerationValue(sTID('align')));
+          info.alignment = ALIGN[a] || a;
+        } catch (e) {}
+        return info;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function readLayer(index, depth, isGroup) {
+      var d = executeActionGet(layerRef(index));
+      var kind = isGroup ? 7 : (d.hasKey(sTID('layerKind')) ? d.getInteger(sTID('layerKind')) : 1);
+      var info = {
+        name: d.getString(cTID('Nm  ')),
+        type: KINDS[kind] || ('LayerKind.' + kind),
+        visible: d.getBoolean(cTID('Vsbl')),
+        opacity: Math.round(d.getInteger(cTID('Opct')) / 2.55),
+        blendMode: 'BlendMode.' + tSID(d.getEnumerationValue(cTID('Md  '))).toUpperCase(),
+        depth: depth
+      };
+      try {
+        var b = d.getObjectValue(sTID('bounds'));
+        var l = px(b, 'left'), t = px(b, 'top'), r = px(b, 'right'), bt = px(b, 'bottom');
+        info.bounds = { left: l, top: t, right: r, bottom: bt, width: r - l, height: bt - t };
+      } catch (e) {
+        info.bounds = null;
+      }
+      if (kind === 3) info.text = readText(d);
+      if (kind === 5) info.isSmartObject = true;
+      if (isGroup) info.children = [];
+      return info;
+    }
+
+    // ActionManager reports a group's bounds as the whole canvas. The DOM
+    // reported the union of its contents (hidden ones included; zero when
+    // empty), so groups are given that, built up from their layers.
+    function readBounds(index) {
+      var d = getProp(index, 'bounds');
+      if (!d) return null;
+      var b = d.getObjectValue(sTID('bounds'));
+      var l = px(b, 'left'), t = px(b, 'top'), r = px(b, 'right'), bt = px(b, 'bottom');
+      return { left: l, top: t, right: r, bottom: bt, width: r - l, height: bt - t };
+    }
+    function growBounds(owners, b) {
+      if (!b || b.width <= 0 || b.height <= 0) return;
+      for (var k = 0; k < owners.length; k++) {
+        var g = owners[k];
+        if (!g.__u) { g.__u = { left: b.left, top: b.top, right: b.right, bottom: b.bottom }; continue; }
+        if (b.left < g.__u.left) g.__u.left = b.left;
+        if (b.top < g.__u.top) g.__u.top = b.top;
+        if (b.right > g.__u.right) g.__u.right = b.right;
+        if (b.bottom > g.__u.bottom) g.__u.bottom = b.bottom;
+      }
+    }
+    function finishGroup(g) {
+      var u = g.__u || { left: 0, top: 0, right: 0, bottom: 0 };
+      g.bounds = { left: u.left, top: u.top, right: u.right, bottom: u.bottom,
+                   width: u.right - u.left, height: u.bottom - u.top };
+      delete g.__u;
+    }
+
+    var rootId = null;
+    if (rootPath !== '') {
       var rootLayer = psResolveLayerPath(doc, rootPath);
-      if (rootLayer.typename !== "LayerSet") {
+      if (rootLayer.typename !== 'LayerSet') {
         throw new Error('Layer "' + rootPath + '" is not a group, so it has no subtree');
       }
-      rootCollection = rootLayer.layers;
+      rootId = rootLayer.id;
     }
 
-    return {
+    var result = [];
+    // Each open group is a frame. collect: children are read in full and
+    // added to frame.list. A truncated group's own frame counts its direct
+    // children instead (counter); frames nested inside skipped regions do neither.
+    // owners: reported groups that contain this frame, whose bounds grow with it.
+    var stack = [{ collect: rootId === null, list: result, depth: -1, counter: null, owners: [], group: null }];
+
+    for (var i = layerCount; i >= firstIndex; i--) {
+      var sec = getProp(i, 'layerSection');
+      if (!sec) continue;
+      var section = tSID(sec.getEnumerationValue(sTID('layerSection')));
+
+      if (section === 'layerSectionEnd') {
+        if (stack.length > 1) {
+          var closed = stack.pop();
+          if (closed.group) finishGroup(closed.group);
+        }
+        continue;
+      }
+      var isGroup = section === 'layerSectionStart';
+      var frame = stack[stack.length - 1];
+      if (frame.counter) frame.counter.childCount++;
+
+      if (!frame.collect) {
+        if (isGroup) {
+          var isRoot = rootId !== null && getProp(i, 'layerID').getInteger(sTID('layerID')) === rootId;
+          stack.push(isRoot ? { collect: true, list: result, depth: -1, counter: null, owners: [], group: null }
+                            : { collect: false, list: null, depth: frame.depth + 1, counter: null, owners: frame.owners, group: null });
+        } else if (frame.owners.length) {
+          // Below a max_depth cut: not reported, but it still sizes its group.
+          growBounds(frame.owners, readBounds(i));
+        }
+        continue;
+      }
+
+      var depth = frame.depth + 1;
+      var info = readLayer(i, depth, isGroup);
+      frame.list.push(info);
+      if (isGroup) {
+        var owners = frame.owners.concat([info]);
+        if (maxDepth > 0 && depth + 1 >= maxDepth) {
+          delete info.children;
+          info.childCount = 0;
+          info.truncated = true;
+          stack.push({ collect: false, list: null, depth: depth, counter: info, owners: owners, group: info });
+        } else {
+          stack.push({ collect: true, list: info.children, depth: depth, counter: null, owners: owners, group: info });
+        }
+      } else {
+        growBounds(frame.owners, info.bounds);
+      }
+    }
+
+    return psJSON({
       documentName: doc.name,
       width:  Math.round(doc.width.as('px')),
       height: Math.round(doc.height.as('px')),
-      root: rootPath === "" ? null : rootPath,
+      root: rootPath === '' ? null : rootPath,
       maxDepth: maxDepth > 0 ? maxDepth : null,
-      layers: collectLayers(rootCollection, 0)
-    };
+      layers: result
+    });
   `,
 
   /**
