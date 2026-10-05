@@ -4,6 +4,8 @@ import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { ExtendScriptSnippets } from '../api/extendscript.js';
 import { requireString } from '../utils/args.js';
 
+const MAX_TIMEOUT_SECONDS = 1800;
+
 export function createActionTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
     {
@@ -30,13 +32,19 @@ export function createActionTools(connection: PhotoshopConnection): ToolDefiniti
     {
       tool: {
         name: 'photoshop_execute_script',
-        description: 'Execute custom ExtendScript code (advanced)',
+        description:
+          'Execute custom ExtendScript code (advanced). Runs with a 30s limit by default; ' +
+          'pass timeout_seconds for long work such as walking or exporting a large document.',
         inputSchema: {
           type: 'object',
           properties: {
             code: {
               type: 'string',
               description: 'ExtendScript code to execute',
+            },
+            timeout_seconds: {
+              type: 'number',
+              description: `Optional time limit in seconds (default 30, max ${MAX_TIMEOUT_SECONDS}).`,
             },
           },
           required: ['code'],
@@ -87,13 +95,19 @@ async function executeCustomScript(
   args: Record<string, unknown>
 ): Promise<ToolResult> {
   const code = requireString(args, 'code');
+  const seconds = typeof args.timeout_seconds === 'number' ? args.timeout_seconds : undefined;
+  if (seconds !== undefined && !(seconds > 0 && seconds <= MAX_TIMEOUT_SECONDS)) {
+    throw new Error(
+      `timeout_seconds must be between 0 and ${MAX_TIMEOUT_SECONDS} (got ${seconds})`
+    );
+  }
 
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);
     const api = await apiFactory.createAPI();
 
     const script = ExtendScriptSnippets.executeCustomScript(code);
-    const result = await api.executeScript(script);
+    const result = await api.executeScript(script, seconds && seconds * 1000);
 
     return {
       content: [

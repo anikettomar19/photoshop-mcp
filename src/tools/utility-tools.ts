@@ -356,20 +356,31 @@ async function sampleColorAtPixel(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const x = args.x as number;
-  const y = args.y as number;
+  const x = requireNumber(args, 'x');
+  const y = requireNumber(args, 'y');
   try {
     const api = await new PhotoshopAPIFactory(connection).createAPI();
     const result = await api.executeScript(`
       if (app.documents.length === 0) throw new Error('No active document');
       var doc = app.activeDocument;
+      var w = doc.width.as('px'), h = doc.height.as('px');
+      if (${x} < 0 || ${y} < 0 || ${x} >= w || ${y} >= h) {
+        throw new Error('Point (${x}, ${y}) is outside the ' + w + 'x' + h + ' canvas of "' + doc.name + '"');
+      }
       var pt = [new UnitValue(${x}, 'px'), new UnitValue(${y}, 'px')];
+      // Remove only our sampler, and always: removeAll() deleted the user's own
+      // samplers, and a sampler left behind by a failed read used up the
+      // document's few sampler slots, so later calls failed with a
+      // "General Photoshop error".
       var sampler = doc.colorSamplers.add(pt);
-      var color = sampler.color;
-      var r = Math.round(color.rgb.red);
-      var g = Math.round(color.rgb.green);
-      var b = Math.round(color.rgb.blue);
-      doc.colorSamplers.removeAll();
+      try {
+        var color = sampler.color;
+        var r = Math.round(color.rgb.red);
+        var g = Math.round(color.rgb.green);
+        var b = Math.round(color.rgb.blue);
+      } finally {
+        sampler.remove();
+      }
       var hex = '#' +
         ('0' + r.toString(16)).slice(-2) +
         ('0' + g.toString(16)).slice(-2) +

@@ -1,5 +1,6 @@
 import { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { Logger } from '../utils/logger.js';
+import { assertRequiredArgs, normalizeArgs } from '../utils/normalize-args.js';
 
 export interface ToolHandler {
   (args: Record<string, unknown>): Promise<CallToolResult>;
@@ -59,7 +60,13 @@ export class ToolRegistry {
 
     try {
       this.logger.debug(`Executing tool: ${name}`);
-      const result = await definition.handler(args);
+      const schema = definition.tool.inputSchema as Parameters<typeof normalizeArgs>[1];
+      const normalized = normalizeArgs(name, schema, args);
+      if (normalized.renamed.length) {
+        this.logger.info(`${name}: mapped arguments ${normalized.renamed.join(', ')}`);
+      }
+      assertRequiredArgs(name, schema, normalized.args);
+      const result = await definition.handler(normalized.args);
       return result;
     } catch (error) {
       this.logger.error(`Tool execution failed: ${name}`, error);

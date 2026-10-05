@@ -1,6 +1,7 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
+import { LONG_SCRIPT_TIMEOUT_MS } from '../platform/script-executor.js';
 import { ExtendScriptSnippets } from '../api/extendscript.js';
 import { requireString } from '../utils/args.js';
 
@@ -66,7 +67,7 @@ async function placeImage(
     const api = await apiFactory.createAPI();
 
     const script = ExtendScriptSnippets.placeImage(filePath, x, y);
-    const result = await api.executeScript(script);
+    const result = await api.executeScript(script, LONG_SCRIPT_TIMEOUT_MS);
 
     return {
       content: [
@@ -100,7 +101,7 @@ async function openImage(
     const api = await apiFactory.createAPI();
 
     const script = ExtendScriptSnippets.openImage(filePath);
-    const result = await api.executeScript(script);
+    const result = await api.executeScript(script, LONG_SCRIPT_TIMEOUT_MS);
 
     return {
       content: [
