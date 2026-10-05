@@ -25,3 +25,18 @@ jobs:
       - run: npm run format:check
       # Builds, then checks every generated ExtendScript parses. No Photoshop needed.
       - run: npm test
+
+  # The one check branch protection requires. It stays put when the matrix
+  # above changes (new Node versions, extra jobs), so protection never waits
+  # on a check name that no longer exists. Do not rename this job without
+  # updating the required check in Settings -> Branches.
+  ci-result:
+    name: ci-result
+    if: always()
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail unless every build job passed
+        run: |
+          echo "build: ${{ needs.build.result }}"
+          test "${{ needs.build.result }}" = "success"
