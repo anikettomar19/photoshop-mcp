@@ -9,6 +9,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 import { Logger } from '../utils/logger.js';
 import { ToolRegistry } from './tool-registry.js';
 import { Session } from './session.js';
+import { withDocumentTarget } from './document-target.js';
 import { createDocumentTools } from '../tools/document-tools.js';
 import { createLayerTools } from '../tools/layer-tools.js';
 import { createImageTools } from '../tools/image-tools.js';
@@ -88,67 +89,67 @@ export class PhotoshopMCPServer {
 
     const documentTools = createDocumentTools(connection);
     documentTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     const layerTools = createLayerTools(connection);
     layerTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     const imageTools = createImageTools(connection);
     imageTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     const imagePlacementTools = createImagePlacementTools(connection);
     imagePlacementTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     const layerTransformTools = createLayerTransformTools(connection);
     layerTransformTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     const layerPropertiesTools = createLayerPropertiesTools(connection);
     layerPropertiesTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     const filterTools = createFilterTools(connection);
     filterTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     const adjustmentTools = createAdjustmentTools(connection);
     adjustmentTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     const textTools = createTextTools(connection);
     textTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     const selectionTools = createSelectionTools(connection);
     selectionTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     const actionTools = createActionTools(connection);
     actionTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     const historyTools = createHistoryTools(connection);
     historyTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     const layerOrderingTools = createLayerOrderingTools(connection);
     layerOrderingTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     // PSD file tools — no Photoshop session required (uses psd-tools Python library)
@@ -159,12 +160,12 @@ export class PhotoshopMCPServer {
 
     const utilityTools = createUtilityTools(connection);
     utilityTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     const layerEffectsTools = createLayerEffectsTools(connection);
     layerEffectsTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     // Sprite tools — no Photoshop session required (pure file I/O)
@@ -183,12 +184,12 @@ export class PhotoshopMCPServer {
 
     const smartObjectTools = createSmartObjectTools(connection);
     smartObjectTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     const compoundTools = createCompoundTools(connection);
     compoundTools.forEach((tool) => {
-      this.toolRegistry.register(tool.tool.name, tool);
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
     this.logger.info(`Registered ${this.toolRegistry.count()} tools`);

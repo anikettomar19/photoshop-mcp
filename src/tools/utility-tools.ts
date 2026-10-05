@@ -4,6 +4,7 @@ import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { LONG_SCRIPT_TIMEOUT_MS } from '../platform/script-executor.js';
 import { requireString, requireNumber } from '../utils/args.js';
 import { jsxString } from '../utils/jsx.js';
+import { layerPathResolver } from '../api/extendscript.js';
 
 export function createUtilityTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -48,7 +49,7 @@ export function createUtilityTools(connection: PhotoshopConnection): ToolDefinit
       tool: {
         name: 'photoshop_export_layer_as_png',
         description:
-          'Export the currently active layer as an isolated PNG file. ' +
+          'Export a layer as an isolated PNG file: the layer at "path" if given, otherwise the active layer. ' +
           'Automatically detects clipping masks: if the layer is clipped to a layer below it, ' +
           'Photoshop composites just those two layers (respecting the clip boundary) and exports the result — ' +
           'so the output matches exactly what you see in Photoshop. ' +
@@ -57,6 +58,12 @@ export function createUtilityTools(connection: PhotoshopConnection): ToolDefinit
         inputSchema: {
           type: 'object',
           properties: {
+            path: {
+              type: 'string',
+              description:
+                'Optional layer or group path, e.g. "Header/Title". Selected before exporting. ' +
+                'Append [n] to a segment to pick between identically named siblings. Omit to export the active layer.',
+            },
             output_path: {
               type: 'string',
               description: 'Absolute output path for the PNG, e.g. /tmp/my_layer.png',
@@ -199,7 +206,9 @@ export function createUtilityTools(connection: PhotoshopConnection): ToolDefinit
       tool: {
         name: 'photoshop_batch_export_layers',
         description:
-          'Export multiple layers as isolated PNGs in a single call. ' +
+          'Export multiple layers or groups as isolated PNGs in a single call. ' +
+          "A group path exports the group's composite. To export a particular state of a group " +
+          '(e.g. a button with only its "Pressed" child visible), pass show/hide with paths relative to it. ' +
           'Each layer is scaled, isolated (siblings hidden), cropped to bounds, merged, trimmed, and saved. ' +
           'The document is restored to its original state after each export via history state undo. ' +
           'Supports clipping masks: when apply_clipping_mask is true, the clip base layer is composited with the target. ' +
@@ -242,6 +251,20 @@ export function createUtilityTools(connection: PhotoshopConnection): ToolDefinit
                     type: 'boolean',
                     description: 'Trim transparent pixels from edges (default: true)',
                     default: true,
+                  },
+                  show: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description:
+                      'Paths relative to "path" to make visible before exporting, e.g. ["State Claim"]. ' +
+                      'Applied after "hide".',
+                  },
+                  hide: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description:
+                      'Paths relative to "path" to hide before exporting, e.g. ["State Locked", "Badge"]. ' +
+                      'Use "*" to hide every direct child, then list the ones you want in "show".',
                   },
                 },
                 required: ['path', 'output_path'],
@@ -397,8 +420,20 @@ async function exportLayerAsPng(
   const outputPath = requireString(args, 'output_path');
   const trim = args.trim_transparency !== false;
   const applyClip = args.apply_clipping_mask !== false;
+  const layerPath = typeof args.path === 'string' && args.path !== '' ? args.path : undefined;
   try {
     const api = await new PhotoshopAPIFactory(connection).createAPI();
+
+    // Callers passed a layer path expecting it to be exported; without this the
+    // tool silently exported whichever layer happened to be active.
+    if (layerPath) {
+      await api.executeScript(`
+        ${layerPathResolver}
+        if (app.documents.length === 0) throw new Error('No active document');
+        app.activeDocument.activeLayer = psResolveLayerPath(app.activeDocument, ${jsxString(layerPath)});
+        return 1;
+      `);
+    }
 
     // Step 0: Detect if layer is clipped
     // Return as pipe-delimited string since ExtendScript toSource() isn't valid JSON
@@ -753,6 +788,8 @@ export async function batchExportLayers(
     scale_percent?: number;
     apply_clipping_mask?: boolean;
     trim?: boolean;
+    show?: string[];
+    hide?: string[];
   }>;
 
   if (!layers || layers.length === 0) {
@@ -766,11 +803,23 @@ export async function batchExportLayers(
     const api = await new PhotoshopAPIFactory(connection).createAPI();
 
     // Build the layer configs as a JS literal for injection into ExtendScript
-    const configEntries = layers.map((l) => {
-      const scale = l.scale_percent ?? 100;
-      const clip = l.apply_clipping_mask ?? false;
+    const stringList = (v: unknown, field: string, i: number): string[] => {
+      if (v === undefined) return [];
+      if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) {
+        throw new Error(`layers[${i}].${field} must be an array of layer paths`);
+      }
+      return v as string[];
+    };
+    const configEntries = layers.map((l, i) => {
+      const scale = Number(l.scale_percent ?? 100);
+      if (!Number.isFinite(scale) || scale <= 0) {
+        throw new Error(`layers[${i}].scale_percent must be a positive number`);
+      }
+      const clip = l.apply_clipping_mask === true;
       const trim = l.trim !== false;
-      return `{path:${jsxString(l.path)},output_path:${jsxString(l.output_path)},scale_percent:${scale},apply_clipping_mask:${clip},trim:${trim}}`;
+      const show = stringList(l.show, 'show', i).map(jsxString).join(',');
+      const hide = stringList(l.hide, 'hide', i).map(jsxString).join(',');
+      return `{path:${jsxString(l.path)},output_path:${jsxString(l.output_path)},scale_percent:${scale},apply_clipping_mask:${clip},trim:${trim},show:[${show}],hide:[${hide}]}`;
     });
     const configArrayStr = '[' + configEntries.join(',') + ']';
 
@@ -836,6 +885,55 @@ export async function batchExportLayers(
         return current;
       }
 
+      // Visibility changes are not part of the history (unless the user turned
+      // on "Make Layer Visibility Changes Undoable"), so resetting the history
+      // state after an export left every layer isolateLayerPath hid still hidden
+      // in the user's document. Record and restore visibility explicitly.
+      function snapshotVisibility(parent, out) {
+        for (var i = 0; i < parent.layers.length; i++) {
+          var l = parent.layers[i];
+          out.push([l, l.visible]);
+          if (l.typename === 'LayerSet') snapshotVisibility(l, out);
+        }
+        return out;
+      }
+      function restoreVisibility(snap) {
+        for (var i = 0; i < snap.length; i++) {
+          try { if (snap[i][0].visible !== snap[i][1]) snap[i][0].visible = snap[i][1]; } catch (e) {}
+        }
+      }
+
+      function findRelative(base, relPath) {
+        var parts = relPath.split('/');
+        var current = base;
+        for (var i = 0; i < parts.length; i++) {
+          current = findLayer(current, parts[i]);
+          if (!current) return null;
+        }
+        return current;
+      }
+
+      // Sets the visibility of children of the exported group, so one group
+      // can be exported in several states (e.g. a button's Normal / Pressed).
+      function applyStates(target, cfg) {
+        if (!cfg.hide.length && !cfg.show.length) return;
+        if (target.typename !== 'LayerSet') {
+          throw new Error('show/hide need "path" to be a group, but it is a layer');
+        }
+        for (var h = 0; h < cfg.hide.length; h++) {
+          if (cfg.hide[h] === '*') { hideAllChildren(target); continue; }
+          var hl = findRelative(target, cfg.hide[h]);
+          if (!hl) throw new Error('hide: "' + cfg.hide[h] + '" not found under "' + cfg.path + '"');
+          hl.visible = false;
+        }
+        for (var s = 0; s < cfg.show.length; s++) {
+          var sl = findRelative(target, cfg.show[s]);
+          if (!sl) throw new Error('show: "' + cfg.show[s] + '" not found under "' + cfg.path + '"');
+          // A child only renders if every group between it and the target is visible.
+          for (var p = sl; p && p !== target; p = p.parent) p.visible = true;
+        }
+      }
+
       function findClipBase(targetLayer) {
         var parent = targetLayer.parent;
         try {
@@ -860,10 +958,12 @@ export async function batchExportLayers(
 
           doc.activeLayer = layer;
           var preState = doc.activeHistoryState;
+          var preVisibility = snapshotVisibility(doc, []);
 
           // Isolate visibility BEFORE any resize — DOM transforms throw
           // "User cancelled the operation" on hidden layers
           isolateLayerPath(cfg.path);
+          applyStates(layer, cfg);
 
           // Scale if needed
           if (cfg.scale_percent !== 100) {
@@ -907,9 +1007,11 @@ export async function batchExportLayers(
 
           // Undo all changes back to pre-state
           doc.activeHistoryState = preState;
+          restoreVisibility(preVisibility);
 
         } catch(e) {
           try { doc.activeHistoryState = preState; } catch(e2) {}
+          try { restoreVisibility(preVisibility); } catch(e3) {}
           results.push(cfg.output_path + '|ERROR|' + e.message + '|0');
         }
       }
