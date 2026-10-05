@@ -31,3 +31,21 @@ export function requireNumber(args: Record<string, unknown>, name: string): numb
   }
   return value;
 }
+
+/**
+ * Returns `args[name]` if it is a finite number, `fallback` if it is absent,
+ * and throws otherwise. For values spliced into ExtendScript, where a
+ * non-number would become broken or injected code.
+ */
+export function optionalNumber(
+  args: Record<string, unknown>,
+  name: string,
+  fallback: number
+): number {
+  const value = args[name];
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`invalid argument "${name}": expected a number (got ${JSON.stringify(value)})`);
+  }
+  return value;
+}

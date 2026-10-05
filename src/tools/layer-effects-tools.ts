@@ -1,7 +1,8 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
-import { jsxString } from '../utils/jsx.js';
+import { jsxEnum, jsxString } from '../utils/jsx.js';
+import { optionalNumber } from '../utils/args.js';
 
 export function createLayerEffectsTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -144,6 +145,45 @@ export function createLayerEffectsTools(connection: PhotoshopConnection): ToolDe
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
+/**
+ * ExtendScript that sets one effect on the active layer and keeps the rest.
+ *
+ * Effects are written by setting the layer's Lefx property with `setd`
+ * (there is no "setLayerEffects" event, which is what these tools called
+ * before, so they failed on every layer). Setting Lefx replaces the whole set,
+ * so the layer's current effects are read first and only `key` is replaced.
+ * Photoshop stores several shadows/strokes under a "...Multi" list; that list is
+ * dropped so the single effect written here is the one that shows.
+ * The script must define `effect` (an ActionDescriptor) before this runs.
+ */
+function setLayerEffectScript(key: string, multiKey: string): string {
+  return `
+      var layer = app.activeDocument.activeLayer;
+      if (layer.isBackgroundLayer) {
+        throw new Error('The Background layer cannot have layer effects; convert it to a normal layer or select another layer.');
+      }
+      var getRef = new ActionReference();
+      getRef.putEnumerated(cTID('Lyr '), cTID('Ordn'), cTID('Trgt'));
+      var layerDesc = executeActionGet(getRef);
+      var fx = layerDesc.hasKey(sTID('layerEffects'))
+        ? layerDesc.getObjectValue(sTID('layerEffects'))
+        : new ActionDescriptor();
+      if (!fx.hasKey(cTID('Scl '))) fx.putUnitDouble(cTID('Scl '), cTID('#Prc'), 100);
+      if (fx.hasKey(sTID('${multiKey}'))) fx.erase(sTID('${multiKey}'));
+      fx.putObject(sTID('${key}'), sTID('${key}'), effect);
+
+      var setRef = new ActionReference();
+      setRef.putProperty(cTID('Prpr'), cTID('Lefx'));
+      setRef.putEnumerated(cTID('Lyr '), cTID('Ordn'), cTID('Trgt'));
+      var setDesc = new ActionDescriptor();
+      setDesc.putReference(cTID('null'), setRef);
+      setDesc.putObject(cTID('T   '), cTID('Lefx'), fx);
+      executeAction(cTID('setd'), setDesc, DialogModes.NO);
+  `;
+}
+
+const STROKE_POSITIONS = ['OUTSIDE', 'INSIDE', 'CENTER'] as const;
+
 const amHelpers = `
 function cTID(s) { return app.charIDToTypeID(s); }
 function sTID(s) { return app.stringIDToTypeID(s); }
@@ -198,10 +238,12 @@ async function getLayerEffects(connection: PhotoshopConnection): Promise<ToolRes
           color:     safeGet(function(){ return colorFromDesc(o.getObjectValue(sTID('color'))); }),
           angle:     safeGet(function(){ return o.getDouble(cTID('lagl')); }),
           distance:  safeGet(function(){ return o.getDouble(cTID('Dstn')); }),
-          size:      safeGet(function(){ return o.getDouble(cTID('blur')); }),
+          // Shadows and glows store their size as 'blur'; a stroke stores its width as 'Sz  '.
+          size:      safeGet(function(){ return o.hasKey(cTID('blur')) ? o.getDouble(cTID('blur')) : o.getDouble(cTID('Sz  ')); }),
           choke:     safeGet(function(){ return o.getDouble(cTID('Ckmt')); }),
           spread:    safeGet(function(){ return o.getDouble(cTID('uglC')); }),
-          position:  safeGet(function(){ return tSID(o.getEnumerationValue(sTID('frameFXType'))); }),
+          // Stroke position (outsetFrame / insetFrame / centeredFrame) lives under 'Styl'.
+          position:  safeGet(function(){ return tSID(o.getEnumerationValue(cTID('Styl'))); }),
           gradientAngle: safeGet(function(){ return o.getDouble(cTID('Angl')); }),
           gradientType:  safeGet(function(){ return tSID(o.getEnumerationValue(sTID('type'))); }),
           gradientScale: safeGet(function(){ return o.getDouble(cTID('Scl ')); }),
@@ -292,46 +334,37 @@ async function addDropShadow(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const r = (args.color_r as number) ?? 0;
-  const g = (args.color_g as number) ?? 0;
-  const b = (args.color_b as number) ?? 0;
-  const opacity = (args.opacity as number) ?? 75;
-  const angle = (args.angle as number) ?? 120;
-  const distance = (args.distance as number) ?? 5;
-  const size = (args.size as number) ?? 5;
-  const spread = (args.spread as number) ?? 0;
+  const r = optionalNumber(args, 'color_r', 0);
+  const g = optionalNumber(args, 'color_g', 0);
+  const b = optionalNumber(args, 'color_b', 0);
+  const opacity = optionalNumber(args, 'opacity', 75);
+  const angle = optionalNumber(args, 'angle', 120);
+  const distance = optionalNumber(args, 'distance', 5);
+  const size = optionalNumber(args, 'size', 5);
+  const spread = optionalNumber(args, 'spread', 0);
   try {
     const api = await new PhotoshopAPIFactory(connection).createAPI();
     const result = await api.executeScript(`
       ${amHelpers}
       if (app.documents.length === 0) throw new Error('No active document');
 
-      var desc1 = new ActionDescriptor();
-      var ref = new ActionReference();
-      ref.putEnumerated(cTID('Lyr '), cTID('Ordn'), cTID('Trgt'));
-      desc1.putReference(cTID('null'), ref);
-
-      var fxDesc = new ActionDescriptor();
-      var dsDesc = new ActionDescriptor();
-
-      dsDesc.putBoolean(sTID('enabled'), true);
-      dsDesc.putEnumerated(sTID('mode'), cTID('BlnM'), cTID('Mltp'));
-      dsDesc.putDouble(cTID('Opct'), ${opacity});
-      dsDesc.putBoolean(sTID('useGlobalAngle'), false);
-      dsDesc.putDouble(cTID('uglA'), ${angle});
-      dsDesc.putDouble(cTID('Dstn'), ${distance});
-      dsDesc.putDouble(cTID('uglC'), ${spread});
-      dsDesc.putDouble(cTID('blur'), ${size});
-
+      var effect = new ActionDescriptor();
+      effect.putBoolean(sTID('enabled'), true);
+      effect.putBoolean(sTID('present'), true);
+      effect.putBoolean(sTID('showInDialog'), true);
+      effect.putEnumerated(cTID('Md  '), cTID('BlnM'), cTID('Mltp'));
       var colorDesc = new ActionDescriptor();
       colorDesc.putDouble(cTID('Rd  '), ${r});
       colorDesc.putDouble(cTID('Grn '), ${g});
       colorDesc.putDouble(cTID('Bl  '), ${b});
-      dsDesc.putObject(sTID('color'), sTID('RGBColor'), colorDesc);
-
-      fxDesc.putObject(sTID('dropShadow'), sTID('dropShadow'), dsDesc);
-      desc1.putObject(cTID('T   '), sTID('layerEffects'), fxDesc);
-      executeAction(sTID('setLayerEffects'), desc1, DialogModes.NO);
+      effect.putObject(cTID('Clr '), cTID('RGBC'), colorDesc);
+      effect.putUnitDouble(cTID('Opct'), cTID('#Prc'), ${opacity});
+      effect.putBoolean(cTID('uglg'), false);
+      effect.putUnitDouble(cTID('lagl'), cTID('#Ang'), ${angle});
+      effect.putUnitDouble(cTID('Dstn'), cTID('#Pxl'), ${distance});
+      effect.putUnitDouble(cTID('Ckmt'), cTID('#Pxl'), ${spread});
+      effect.putUnitDouble(cTID('blur'), cTID('#Pxl'), ${size});
+      ${setLayerEffectScript('dropShadow', 'dropShadowMulti')}
 
       return {
         applied: true,
@@ -362,12 +395,12 @@ async function addStrokeEffect(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const size = (args.size as number) ?? 3;
+  const size = optionalNumber(args, 'size', 3);
   const position = (args.position as string) ?? 'OUTSIDE';
-  const r = (args.color_r as number) ?? 0;
-  const g = (args.color_g as number) ?? 0;
-  const b = (args.color_b as number) ?? 0;
-  const opacity = (args.opacity as number) ?? 100;
+  const r = optionalNumber(args, 'color_r', 0);
+  const g = optionalNumber(args, 'color_g', 0);
+  const b = optionalNumber(args, 'color_b', 0);
+  const opacity = optionalNumber(args, 'opacity', 100);
 
   // Map position string → Photoshop frameFXType enum string
   const posMap: Record<string, string> = {
@@ -375,7 +408,7 @@ async function addStrokeEffect(
     INSIDE: 'InsF',
     CENTER: 'CtrF',
   };
-  const posEnum = posMap[position.toUpperCase()] ?? 'OutF';
+  const posEnum = posMap[jsxEnum(position.toUpperCase(), STROKE_POSITIONS, 'stroke position')];
 
   try {
     const api = await new PhotoshopAPIFactory(connection).createAPI();
@@ -383,29 +416,21 @@ async function addStrokeEffect(
       ${amHelpers}
       if (app.documents.length === 0) throw new Error('No active document');
 
-      var desc1 = new ActionDescriptor();
-      var ref = new ActionReference();
-      ref.putEnumerated(cTID('Lyr '), cTID('Ordn'), cTID('Trgt'));
-      desc1.putReference(cTID('null'), ref);
-
-      var fxDesc = new ActionDescriptor();
-      var stDesc = new ActionDescriptor();
-
-      stDesc.putBoolean(sTID('enabled'), true);
-      stDesc.putDouble(cTID('Sz  '), ${size});
-      stDesc.putEnumerated(sTID('frameFXType'), sTID('frameFXType'), cTID('${posEnum}'));
-      stDesc.putDouble(cTID('Opct'), ${opacity});
-      stDesc.putEnumerated(cTID('PntT'), cTID('FrFl'), cTID('SClr'));
-
+      var effect = new ActionDescriptor();
+      effect.putBoolean(sTID('enabled'), true);
+      effect.putBoolean(sTID('present'), true);
+      effect.putBoolean(sTID('showInDialog'), true);
+      effect.putEnumerated(cTID('Styl'), cTID('FStl'), cTID('${posEnum}'));
+      effect.putEnumerated(cTID('PntT'), cTID('FrFl'), cTID('SClr'));
+      effect.putEnumerated(cTID('Md  '), cTID('BlnM'), cTID('Nrml'));
+      effect.putUnitDouble(cTID('Opct'), cTID('#Prc'), ${opacity});
+      effect.putUnitDouble(cTID('Sz  '), cTID('#Pxl'), ${size});
       var colorDesc = new ActionDescriptor();
       colorDesc.putDouble(cTID('Rd  '), ${r});
       colorDesc.putDouble(cTID('Grn '), ${g});
       colorDesc.putDouble(cTID('Bl  '), ${b});
-      stDesc.putObject(sTID('color'), sTID('RGBColor'), colorDesc);
-
-      fxDesc.putObject(sTID('frameFX'), sTID('frameFX'), stDesc);
-      desc1.putObject(cTID('T   '), sTID('layerEffects'), fxDesc);
-      executeAction(sTID('setLayerEffects'), desc1, DialogModes.NO);
+      effect.putObject(cTID('Clr '), cTID('RGBC'), colorDesc);
+      ${setLayerEffectScript('frameFX', 'frameFXMulti')}
 
       return {
         applied: true,
