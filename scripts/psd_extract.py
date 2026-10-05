@@ -13,20 +13,85 @@ from psd_tools import PSDImage
 from psd_tools.constants import Tag
 
 
+class ToolError(Exception):
+    """An error meant for the caller: printed as one line, without a traceback."""
+
+
+ROOT_PATHS = ("", "/", "__ROOT__", "<root>", "<document>")
+
+
+def _sibling_names(container):
+    names = [f'"{l.name}"' + ("/" if l.is_group() else "") for l in container]
+    return ", ".join(names) if names else "(none)"
+
+
 def get_layer_by_path(psd, path: str):
-    """Navigate to a layer by slash-separated path."""
+    """
+    Navigate to a layer by slash-separated path.
+
+    Matches the live-Photoshop resolver: a missing segment lists the siblings
+    that do exist, identically named siblings are an error unless picked with
+    "Name[n]" (0-based), and walking into something that is not a group says
+    what it is instead of failing with "object is not iterable".
+    """
+    import re
+
     parts = path.strip("/").split("/")
     node = psd
-    for part in parts:
-        found = None
-        for layer in node:
-            if layer.name == part:
-                found = layer
-                break
-        if found is None:
-            raise ValueError(f"Layer not found: '{part}' in path '{path}'")
-        node = found
+    for i, part in enumerate(parts):
+        under = "/".join(parts[:i]) or "<document>"
+        if not (node is psd or node.is_group()):
+            raise ToolError(
+                f"'{under}' is a {node.kind} layer, not a group, so it has no '{part}' inside it"
+            )
+        want = None
+        m = re.match(r"^(.*)\[(\d+)\]$", part)
+        if m:
+            part, want = m.group(1), int(m.group(2))
+        matches = [l for l in node if l.name == part]
+        if not matches:
+            raise ToolError(
+                f"Layer not found: '{part}' under '{under}'. Siblings here: {_sibling_names(node)}"
+            )
+        if want is not None:
+            if want >= len(matches):
+                raise ToolError(f"'{part}[{want}]' is out of range: only {len(matches)} sibling(s) named '{part}'")
+            node = matches[want]
+        elif len(matches) > 1:
+            raise ToolError(
+                f"'{part}' under '{under}' is ambiguous: {len(matches)} siblings share that name. "
+                f"Use '{part}[0]' through '{part}[{len(matches) - 1}]'"
+            )
+        else:
+            node = matches[0]
     return node
+
+
+def _open_embedded(layer, path_hint: str):
+    """
+    Returns the smart object's embedded image, or its rendered pixels when the
+    embedded file is something Pillow can't read (a PSB, AI or PDF). Saving
+    those as .png and reopening them is what raised UnidentifiedImageError.
+    """
+    import os, tempfile
+    from PIL import UnidentifiedImageError
+
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+        raw_path = f.name
+    try:
+        layer.smart_object.save(raw_path)
+        try:
+            return Image.open(raw_path).convert("RGBA"), "embedded"
+        except UnidentifiedImageError:
+            rendered = layer.composite()
+            if rendered is None:
+                raise ToolError(
+                    f"Smart object '{path_hint}' embeds {layer.smart_object.filename}, which can't be read, "
+                    "and has no rendered pixels"
+                )
+            return rendered.convert("RGBA"), "rendered"
+    finally:
+        os.unlink(raw_path)
 
 
 def extract_layer(layer, out_path: str, apply_clip_context=None):
@@ -51,14 +116,15 @@ def extract_layer(layer, out_path: str, apply_clip_context=None):
             _composite_with_clip(layer, apply_clip_context, out_path)
         else:
             # Raw extraction: no clipping applied
-            so.save(out_path)
-            img = Image.open(out_path)
-            print(f"Extracted Smart Object: {img.size} {img.mode}")
+            img, source = _open_embedded(layer, layer.name)
+            img.save(out_path)
+            print(f"Extracted Smart Object ({source}): {img.size} {img.mode}")
     else:
         img = layer.composite()
-        if img is None:
-            print(f"Warning: composite() returned None for '{layer.name}'")
-            return
+        # An empty layer composites to None or to a fully transparent canvas;
+        # either way this used to report success for an image with nothing in it.
+        if img is None or img.getbbox() is None:
+            raise ToolError(f"'{layer.name}' has no pixels to export (it is empty or fully hidden)")
         img.save(out_path)
         print(f"Extracted layer: {img.size} {img.mode}")
 
@@ -77,8 +143,8 @@ def _composite_with_clip(target_layer, parent_group, out_path: str):
 
     layers = list(parent_group)  # bottom-to-top in psd-tools
 
-    # Locate target in layer list
-    target_idx = next((i for i, l in enumerate(layers) if l.name == target_layer.name), None)
+    # Locate target in layer list (by identity: siblings can share a name)
+    target_idx = next((i for i, l in enumerate(layers) if l is target_layer), None)
     if target_idx is None:
         raise ValueError("Target layer not found in parent group")
 
@@ -90,12 +156,7 @@ def _composite_with_clip(target_layer, parent_group, out_path: str):
             clip_base = l
             break
 
-    # Extract raw Smart Object to a temp file
-    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
-        raw_path = f.name
-    target_layer.smart_object.save(raw_path)
-    raw_img = Image.open(raw_path).convert("RGBA")
-    os.unlink(raw_path)
+    raw_img, _ = _open_embedded(target_layer, target_layer.name)
 
     # bbox is a tuple: (left, top, right, bottom) in PSD canvas px
     so_b = target_layer.bbox
@@ -197,7 +258,7 @@ def extract_fx(layer):
         print(f"         m_UnderlaySoftness: {softness:.3f}")
 
 
-def extract_layer_tree(psd, group_path):
+def extract_layer_tree(psd, group_path, max_depth=None):
     """
     Extract the full layer tree of a group as JSON with all data PixelPeep needs:
     bounds, text (font/size/color/alignment), FX (stroke/shadow/gradient), solidfill colors, PPI.
@@ -217,7 +278,13 @@ def extract_layer_tree(psd, group_path):
     except Exception:
         pass
 
-    group = get_layer_by_path(psd, group_path)
+    # No group (or an explicit root marker) walks the whole document; callers
+    # tried "", "__ROOT__" and omitting it, and all used to fail.
+    is_root = group_path is None or group_path.strip() in ROOT_PATHS
+    group = psd if is_root else get_layer_by_path(psd, group_path)
+    if not is_root and not group.is_group():
+        raise ToolError(f"'{group_path}' is a {group.kind} layer, not a group")
+    group_path = "" if is_root else group_path
 
     def get_color(c):
         """Extract RGB from psd-tools Descriptor color object."""
@@ -391,22 +458,30 @@ def extract_layer_tree(psd, group_path):
 
             layers.append(entry)
             if is_group:
-                walk(layer, path, bounds, depth + 1)
+                # A group cut off by max_depth says how many children it has,
+                # so a clipped walk is never mistaken for an empty group.
+                if max_depth is not None and depth >= max_depth:
+                    entry["child_count"] = len(list(layer))
+                    entry["truncated"] = True
+                else:
+                    walk(layer, path, bounds, depth + 1)
 
-    gb = {"left": group.bbox[0], "top": group.bbox[1], "right": group.bbox[2], "bottom": group.bbox[3],
-          "width": group.bbox[2] - group.bbox[0], "height": group.bbox[3] - group.bbox[1]}
+    bb = (0, 0, psd.width, psd.height) if is_root else group.bbox
+    gb = {"left": bb[0], "top": bb[1], "right": bb[2], "bottom": bb[3],
+          "width": bb[2] - bb[0], "height": bb[3] - bb[1]}
     walk(group, group_path, gb, 1)
 
     result = {
         "document": {"width": psd.width, "height": psd.height, "ppi": ppi},
-        "target_group": group_path,
+        "target_group": group_path or None,
+        "max_depth": max_depth,
         "group_bounds": gb,
         "layers": layers
     }
     return json.dumps(result)
 
 
-if __name__ == "__main__":
+def main():
     if len(sys.argv) < 3:
         print(__doc__)
         sys.exit(1)
@@ -419,19 +494,28 @@ if __name__ == "__main__":
         layer = get_layer_by_path(psd, layer_path)
         extract_fx(layer)
     elif sys.argv[2] == "--layer-tree":
-        group_path = sys.argv[3]
-        print(extract_layer_tree(psd, group_path))
+        group_path = sys.argv[3] if len(sys.argv) > 3 else ""
+        max_depth = int(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None
+        print(extract_layer_tree(psd, group_path, max_depth))
     else:
         layer_path = sys.argv[2]
         out_path = sys.argv[3] if len(sys.argv) > 3 else "/tmp/extracted_layer.png"
         layer = get_layer_by_path(psd, layer_path)
 
-        # Auto-detect if layer needs clip context (parent group)
-        path_parts = layer_path.split("/")
-        if len(path_parts) > 1:
-            parent_path = "/".join(path_parts[:-1])
-            parent = get_layer_by_path(psd, parent_path)
-        else:
-            parent = None
+        # Clip only layers that are actually clipped. This used to pass the
+        # parent group for every nested layer, so an unclipped smart object was
+        # cropped to whatever layer sat below it, and a clipped layer at the top
+        # level (no parent group) was never clipped at all.
+        parent = layer.parent if getattr(layer, "clipping", False) else None
 
         extract_layer(layer, out_path, apply_clip_context=parent)
+
+
+if __name__ == "__main__":
+    # Errors meant for the caller (and file problems) are one "ERROR:" line on
+    # stderr; anything else keeps its traceback for debugging.
+    try:
+        main()
+    except (ToolError, FileNotFoundError, IsADirectoryError, PermissionError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(2)

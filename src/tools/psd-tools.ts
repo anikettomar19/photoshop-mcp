@@ -2,7 +2,15 @@ import { ToolDefinition } from '../core/tool-registry.js';
 import { spawn, spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import { existsSync } from 'fs';
 import { requireString } from '../utils/args.js';
+
+/** Checks the PSD exists before spawning Python, which otherwise fails with a traceback. */
+function requirePsd(args: Record<string, unknown>): string {
+  const psdPath = requireString(args, 'psd_path');
+  if (!existsSync(psdPath)) throw new Error(`PSD file not found: ${psdPath}`);
+  return psdPath;
+}
 
 // Pick the Python interpreter that has psd-tools + Pillow installed
 function detectPython(): string {
@@ -31,7 +39,12 @@ function runPython(args: string[]): Promise<string> {
     python.stderr.on('data', (d) => (stderr += d.toString()));
     python.on('close', (code) => {
       if (code !== 0) {
-        reject(new Error(`psd_extract.py exited ${code}:\n${stderr || stdout}`));
+        // psd_extract.py reports errors meant for the caller as one "ERROR:"
+        // line; only unexpected failures keep their full traceback.
+        const line = stderr.split('\n').find((l) => l.startsWith('ERROR: '));
+        reject(
+          new Error(line ? line.slice(7) : `psd_extract.py exited ${code}:\n${stderr || stdout}`)
+        );
       } else {
         resolve(stdout + (stderr ? `\nSTDERR:\n${stderr}` : ''));
       }
@@ -78,7 +91,7 @@ export function createPsdTools(): ToolDefinition[] {
         },
       },
       handler: async (args) => {
-        const psdPath = requireString(args, 'psd_path');
+        const psdPath = requirePsd(args);
         const layerPath = requireString(args, 'layer_path');
         const outputPath =
           (args['output_path'] as string | undefined) ?? '/tmp/extracted_layer.png';
@@ -117,7 +130,7 @@ export function createPsdTools(): ToolDefinition[] {
         },
       },
       handler: async (args) => {
-        const psdPath = requireString(args, 'psd_path');
+        const psdPath = requirePsd(args);
         const layerPath = requireString(args, 'layer_path');
 
         try {
@@ -132,7 +145,9 @@ export function createPsdTools(): ToolDefinition[] {
       tool: {
         name: 'photoshop_get_psd_layer_tree',
         description:
-          'Extract the full layer tree of a PSD group as structured JSON — without needing Photoshop open. ' +
+          'Extract the layer tree of a PSD (or of one group in it) as structured JSON — without needing Photoshop open. ' +
+          'Omit group_path to walk the whole document; pass max_depth to limit how deep it goes. ' +
+          'Hidden layers are skipped. ' +
           'Returns every layer with: bounds, type, text content (font/size/color/alignment), ' +
           'FX (stroke/drop_shadow/gradient_overlay), solidfill colors, clip mask flags, and document PPI. ' +
           'This is the primary data source for the Picasso pipeline (PixelPeep). ' +
@@ -147,18 +162,28 @@ export function createPsdTools(): ToolDefinition[] {
             group_path: {
               type: 'string',
               description:
-                'Slash-separated path to the target group: e.g. "Beach" or "Daily Task main pop up"',
+                'Optional slash-separated path to a group, e.g. "Beach" or "Daily Task main pop up". ' +
+                'Omit to walk the whole document. Append [n] to pick between identically named siblings.',
+            },
+            max_depth: {
+              type: 'number',
+              description:
+                'Optional cap on levels returned (1 = only the direct children). Groups cut off report child_count and truncated:true.',
             },
           },
-          required: ['psd_path', 'group_path'],
+          required: ['psd_path'],
         },
       },
       handler: async (args) => {
-        const psdPath = requireString(args, 'psd_path');
-        const groupPath = requireString(args, 'group_path');
+        const psdPath = requirePsd(args);
+        const groupPath = typeof args.group_path === 'string' ? args.group_path : '';
+        const maxDepth =
+          typeof args.max_depth === 'number' && args.max_depth > 0
+            ? String(Math.floor(args.max_depth))
+            : '';
 
         try {
-          const output = await runPython([psdPath, '--layer-tree', groupPath]);
+          const output = await runPython([psdPath, '--layer-tree', groupPath, maxDepth]);
           return ok(output);
         } catch (err) {
           return fail(String(err));
