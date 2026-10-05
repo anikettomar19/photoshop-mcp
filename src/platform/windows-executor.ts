@@ -140,7 +140,7 @@ End If
     try {
       const { stdout } = await execAsync('tasklist /FI "IMAGENAME eq Photoshop.exe"');
       return stdout.toLowerCase().includes('photoshop.exe');
-    } catch (error) {
+    } catch {
       return false;
     }
   }

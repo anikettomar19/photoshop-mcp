@@ -18,6 +18,10 @@ export default [
       '@typescript-eslint': tseslint,
     },
     rules: {
+      // TypeScript already resolves identifiers; the base rules flag Node globals
+      // and type-only names. typescript-eslint recommends turning them off.
+      'no-undef': 'off',
+      'no-unused-vars': 'off',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/explicit-function-return-type': 'off',
