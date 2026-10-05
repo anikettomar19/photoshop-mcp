@@ -1,6 +1,7 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
+import { jsxString } from '../utils/jsx.js';
 
 export function createLayerEffectsTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -327,7 +328,7 @@ async function addStrokeEffect(
         applied: true,
         effect: 'stroke',
         size: ${size},
-        position: '${position}',
+        position: ${jsxString(position)},
         color: { r: ${r}, g: ${g}, b: ${b} },
         opacity: ${opacity}
       };

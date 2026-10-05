@@ -2,7 +2,7 @@ import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { requireString } from '../utils/args.js';
-import { ExtendScriptSnippets } from '../api/extendscript.js';
+import { BLEND_MODES, ExtendScriptSnippets } from '../api/extendscript.js';
 
 export function createLayerPropertiesTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -46,35 +46,7 @@ export function createLayerPropertiesTools(connection: PhotoshopConnection): Too
             blendMode: {
               type: 'string',
               description: 'Blend mode name',
-              enum: [
-                'NORMAL',
-                'DISSOLVE',
-                'DARKEN',
-                'MULTIPLY',
-                'COLORBURN',
-                'LINEARBURN',
-                'DARKERCOLOR',
-                'LIGHTEN',
-                'SCREEN',
-                'COLORDODGE',
-                'LINEARDODGE',
-                'LIGHTERCOLOR',
-                'OVERLAY',
-                'SOFTLIGHT',
-                'HARDLIGHT',
-                'VIVIDLIGHT',
-                'LINEARLIGHT',
-                'PINLIGHT',
-                'HARDMIX',
-                'DIFFERENCE',
-                'EXCLUSION',
-                'SUBTRACT',
-                'DIVIDE',
-                'HUE',
-                'SATURATION',
-                'COLOR',
-                'LUMINOSITY',
-              ],
+              enum: [...BLEND_MODES],
             },
           },
           required: ['blendMode'],

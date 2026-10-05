@@ -3,6 +3,23 @@
  * ExtendScript is the legacy scripting API for Photoshop
  */
 
+import { jsxEnum, jsxString } from "../utils/jsx.js";
+
+export const BLEND_MODES = [
+  "NORMAL", "DISSOLVE", "DARKEN", "MULTIPLY", "COLORBURN", "LINEARBURN", "DARKERCOLOR",
+  "LIGHTEN", "SCREEN", "COLORDODGE", "LINEARDODGE", "LIGHTERCOLOR", "OVERLAY", "SOFTLIGHT",
+  "HARDLIGHT", "VIVIDLIGHT", "LINEARLIGHT", "PINLIGHT", "HARDMIX", "DIFFERENCE", "EXCLUSION",
+  "SUBTRACT", "DIVIDE", "HUE", "SATURATION", "COLOR", "LUMINOSITY",
+] as const;
+
+export const NOISE_DISTRIBUTIONS = ["UNIFORM", "GAUSSIAN"] as const;
+
+export const TEXT_JUSTIFICATIONS = [
+  "LEFT", "CENTER", "RIGHT", "LEFTJUSTIFIED", "CENTERJUSTIFIED", "RIGHTJUSTIFIED", "FULLYJUSTIFIED",
+] as const;
+
+const NEW_DOCUMENT_MODES = ["NewDocumentMode.RGB", "NewDocumentMode.CMYK", "NewDocumentMode.GRAYSCALE"] as const;
+
 /**
  * Helper functions for character/string ID conversion
  */
@@ -160,7 +177,7 @@ export const ExtendScriptSnippets = {
       UnitValue(${height}, 'px'),
       ${resolution},
       'New Document',
-      ${colorMode}
+      ${jsxEnum(colorMode, NEW_DOCUMENT_MODES, "color mode")}
     );
     return { id: doc.id, name: doc.name };
   `,
@@ -191,14 +208,14 @@ export const ExtendScriptSnippets = {
     var doc = app.activeDocument;
     var textLayer = doc.artLayers.add();
     textLayer.kind = LayerKind.TEXT;
-    textLayer.textItem.contents = "${text.replace(/"/g, '\\"')}";
+    textLayer.textItem.contents = ${jsxString(text)};
     textLayer.textItem.position = [${x}, ${y}];
     textLayer.textItem.size = ${fontSize};
     
     var result = {
       created: true,
       layerName: textLayer.name,
-      text: "${text.replace(/"/g, '\\"')}",
+      text: ${jsxString(text)},
       position: { x: ${x}, y: ${y} },
       fontSize: ${fontSize},
       context: getContextInfo()
@@ -217,9 +234,9 @@ export const ExtendScriptSnippets = {
       throw new Error('No active document');
     }
     
-    var imageFile = new File("${filePath.replace(/\\/g, '\\\\')}");
+    var imageFile = new File(${jsxString(filePath)});
     if (!imageFile.exists) {
-      throw new Error('Image file not found: ${filePath}');
+      throw new Error('Image file not found: ' + ${jsxString(filePath)});
     }
     
     // Place image using ActionDescriptor
@@ -238,7 +255,7 @@ export const ExtendScriptSnippets = {
     var result = { 
       placed: true,
       layerName: layer.name,
-      filePath: "${filePath}",
+      filePath: ${jsxString(filePath)},
       position: { x: ${x}, y: ${y} },
       layerBounds: {
         width: layer.bounds[2].as('px') - layer.bounds[0].as('px'),
@@ -253,9 +270,9 @@ export const ExtendScriptSnippets = {
    * Open an image file as a new document
    */
   openImage: (filePath: string) => `
-    var imageFile = new File("${filePath.replace(/\\/g, '\\\\')}");
+    var imageFile = new File(${jsxString(filePath)});
     if (!imageFile.exists) {
-      throw new Error('Image file not found: ${filePath}');
+      throw new Error('Image file not found: ' + ${jsxString(filePath)});
     }
     
     var doc = app.open(imageFile);
@@ -275,7 +292,7 @@ export const ExtendScriptSnippets = {
       throw new Error('No active document');
     }
     var doc = app.activeDocument;
-    var saveFile = new File("${path.replace(/\\/g, '\\\\')}");
+    var saveFile = new File(${jsxString(path)});
     var psdOptions = new PhotoshopSaveOptions();
     psdOptions.embedColorProfile = true;
     doc.saveAs(saveFile, psdOptions, true);
@@ -290,7 +307,7 @@ export const ExtendScriptSnippets = {
       throw new Error('No active document');
     }
     var doc = app.activeDocument;
-    var saveFile = new File("${path.replace(/\\/g, '\\\\')}");
+    var saveFile = new File(${jsxString(path)});
     var jpegOptions = new JPEGSaveOptions();
     jpegOptions.quality = ${quality};
     jpegOptions.embedColorProfile = true;
@@ -306,7 +323,7 @@ export const ExtendScriptSnippets = {
       throw new Error('No active document');
     }
     var doc = app.activeDocument;
-    var saveFile = new File("${path.replace(/\\/g, '\\\\')}");
+    var saveFile = new File(${jsxString(path)});
     var pngOptions = new PNGSaveOptions();
     pngOptions.compression = 9;
     doc.saveAs(saveFile, pngOptions, true);
@@ -336,7 +353,7 @@ export const ExtendScriptSnippets = {
     }
     var doc = app.activeDocument;
     var layer = doc.artLayers.add();
-    ${name ? `layer.name = "${name.replace(/"/g, '\\"')}";` : ''}
+    ${name ? `layer.name = ${jsxString(name)};` : ''}
     
     var result = { 
       created: true,
@@ -436,12 +453,12 @@ export const ExtendScriptSnippets = {
     }
     var doc = app.activeDocument;
     for (var i = 0; i < doc.layers.length; i++) {
-      if (doc.layers[i].name === "${name.replace(/"/g, '\\"')}") {
+      if (doc.layers[i].name === ${jsxString(name)}) {
         doc.activeLayer = doc.layers[i];
         return { selected: true, name: doc.layers[i].name };
       }
     }
-    throw new Error('Layer not found: ${name.replace(/"/g, '\\"')}');
+    throw new Error('Layer not found: ' + ${jsxString(name)});
   `,
 
   /**
@@ -612,7 +629,7 @@ export const ExtendScriptSnippets = {
     var doc = app.activeDocument;
     var layer = doc.activeLayer;
     
-    layer.blendMode = BlendMode.${blendMode};
+    layer.blendMode = BlendMode.${jsxEnum(blendMode, BLEND_MODES, "blend mode")};
     
     var result = { 
       updated: true,
@@ -633,7 +650,7 @@ export const ExtendScriptSnippets = {
       throw new Error('No active document');
     }
     var doc = app.activeDocument;
-    var targetPath = "${(path ?? '').replace(/"/g, '\\"')}";
+    var targetPath = ${jsxString(path ?? '')};
     var layer = targetPath === "" ? doc.activeLayer : psResolveLayerPath(doc, targetPath);
 
     layer.visible = ${visible};
@@ -674,7 +691,7 @@ export const ExtendScriptSnippets = {
     var layer = doc.activeLayer;
     
     var oldName = layer.name;
-    layer.name = "${newName.replace(/"/g, '\\"')}";
+    layer.name = ${jsxString(newName)};
     
     return { 
       oldName: oldName,
@@ -693,7 +710,7 @@ export const ExtendScriptSnippets = {
     var layer = doc.activeLayer;
     
     var duplicated = layer.duplicate();
-    ${newName ? `duplicated.name = "${newName.replace(/"/g, '\\"')}";` : ''}
+    ${newName ? `duplicated.name = ${jsxString(newName)};` : ''}
     
     return { 
       originalName: layer.name,
@@ -811,13 +828,13 @@ export const ExtendScriptSnippets = {
       throw new Error('Can only apply filters to normal (raster) layers');
     }
     
-    var distEnum = NoiseDistribution.${distribution};
+    var distEnum = NoiseDistribution.${jsxEnum(distribution, NOISE_DISTRIBUTIONS, "noise distribution")};
     layer.applyAddNoise(${amount}, distEnum, ${monochromatic});
     
     return { 
       filter: 'Add Noise',
       amount: ${amount},
-      distribution: '${distribution}',
+      distribution: ${jsxString(distribution)},
       monochromatic: ${monochromatic}
     };
   `,
@@ -1007,7 +1024,7 @@ export const ExtendScriptSnippets = {
       throw new Error('Active layer is not a text layer');
     }
     
-    layer.textItem.font = "${fontName.replace(/"/g, '\\"')}";
+    layer.textItem.font = ${jsxString(fontName)};
     ${fontSize ? `layer.textItem.size = ${fontSize};` : ''}
     
     return { 
@@ -1053,10 +1070,10 @@ export const ExtendScriptSnippets = {
       throw new Error('Active layer is not a text layer');
     }
     
-    layer.textItem.justification = Justification.${alignment};
+    layer.textItem.justification = Justification.${jsxEnum(alignment, TEXT_JUSTIFICATIONS, "text alignment")};
     
     return { 
-      alignment: '${alignment}'
+      alignment: ${jsxString(alignment)}
     };
   `,
 
@@ -1073,7 +1090,7 @@ export const ExtendScriptSnippets = {
       throw new Error('Active layer is not a text layer');
     }
     
-    layer.textItem.contents = "${newText.replace(/"/g, '\\"')}";
+    layer.textItem.contents = ${jsxString(newText)};
     
     return { 
       text: layer.textItem.contents
@@ -1212,11 +1229,11 @@ export const ExtendScriptSnippets = {
    * Play an action from Actions palette
    */
   playAction: (actionName: string, actionSetName: string) => `
-    app.doAction("${actionName.replace(/"/g, '\\"')}", "${actionSetName.replace(/"/g, '\\"')}");
+    app.doAction(${jsxString(actionName)}, ${jsxString(actionSetName)});
     
     return { 
-      action: '${actionName}',
-      set: '${actionSetName}'
+      action: ${jsxString(actionName)},
+      set: ${jsxString(actionSetName)}
     };
   `,
 
@@ -1423,25 +1440,25 @@ export const ExtendScriptSnippets = {
     // Find target layer
     var targetLayer = null;
     for (var i = 0; i < doc.layers.length; i++) {
-      if (doc.layers[i].name === "${targetLayerName.replace(/"/g, '\\"')}") {
+      if (doc.layers[i].name === ${jsxString(targetLayerName)}) {
         targetLayer = doc.layers[i];
         break;
       }
     }
     
     if (!targetLayer) {
-      throw new Error('Target layer not found: ${targetLayerName}');
+      throw new Error('Target layer not found: ' + ${jsxString(targetLayerName)});
     }
     
     // Determine ElementPlacement
     var placement;
-    if ("${position}" === "ABOVE") {
+    if (${jsxString(position)} === "ABOVE") {
       placement = ElementPlacement.PLACEBEFORE;
-    } else if ("${position}" === "BELOW") {
+    } else if (${jsxString(position)} === "BELOW") {
       placement = ElementPlacement.PLACEAFTER;
-    } else if ("${position}" === "TOP") {
+    } else if (${jsxString(position)} === "TOP") {
       placement = ElementPlacement.PLACEATBEGINNING;
-    } else if ("${position}" === "BOTTOM") {
+    } else if (${jsxString(position)} === "BOTTOM") {
       placement = ElementPlacement.PLACEATEND;
     } else {
       throw new Error('Invalid position. Use: ABOVE, BELOW, TOP, or BOTTOM');
@@ -1453,7 +1470,7 @@ export const ExtendScriptSnippets = {
     var result = {
       moved: true,
       layerName: activeLayer.name,
-      position: "${position}",
+      position: ${jsxString(position)},
       relativeTo: targetLayer.name,
       context: getContextInfo()
     };
@@ -1637,7 +1654,7 @@ export const ExtendScriptSnippets = {
       return result;
     }
 
-    var rootPath = "${(rootPath ?? '').replace(/"/g, '\\"')}";
+    var rootPath = ${jsxString(rootPath ?? '')};
     var rootCollection = doc.layers;
     if (rootPath !== "") {
       var rootLayer = psResolveLayerPath(doc, rootPath);
@@ -1668,14 +1685,14 @@ export const ExtendScriptSnippets = {
       throw new Error('No active document');
     }
     var doc = app.activeDocument;
-    var layer = psResolveLayerPath(doc, "${path.replace(/"/g, '\\"')}");
+    var layer = psResolveLayerPath(doc, ${jsxString(path)});
 
     doc.activeLayer = layer;
     return {
       selected: true,
       name: layer.name,
       type: layer.typename === "LayerSet" ? "GROUP" : String(layer.kind),
-      path: "${path.replace(/"/g, '\\"')}"
+      path: ${jsxString(path)}
     };
   `,
 
@@ -1688,7 +1705,7 @@ export const ExtendScriptSnippets = {
     }
     var doc = app.activeDocument;
     var group = doc.layerSets.add();
-    ${name ? `group.name = "${name.replace(/"/g, '\\"')}";` : ''}
+    ${name ? `group.name = ${jsxString(name)};` : ''}
     return {
       created: true,
       groupName: group.name
@@ -1708,7 +1725,7 @@ export const ExtendScriptSnippets = {
     }
     var doc = app.activeDocument;
 
-    var layer = psResolveLayerPath(doc, "${layerPath.replace(/"/g, '\\"')}");
+    var layer = psResolveLayerPath(doc, ${jsxString(layerPath)});
 
     var sf = ${scaleFactor};
 

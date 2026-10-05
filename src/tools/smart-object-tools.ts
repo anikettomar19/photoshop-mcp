@@ -3,6 +3,7 @@ import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { layerPathResolver } from '../api/extendscript.js';
 import { requireString } from '../utils/args.js';
+import { jsxString } from '../utils/jsx.js';
 
 export function createSmartObjectTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -121,8 +122,8 @@ export function scriptReplaceSmartObject(
   fitToLayer: boolean,
   saveAfter: boolean
 ): string {
-  const escapedPath = layerPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const escapedFile = newFilePath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const pathLiteral = jsxString(layerPath);
+  const fileLiteral = jsxString(newFilePath);
 
   return `
     function cTID(s) { return app.charIDToTypeID(s); }
@@ -135,7 +136,7 @@ export function scriptReplaceSmartObject(
     var doc = app.activeDocument;
 
     // ── Navigate to layer by path ──────────────────────────────────────────
-    var layer = psResolveLayerPath(doc, "${escapedPath}");
+    var layer = psResolveLayerPath(doc, ${pathLiteral});
 
     // ── Validate smart object ──────────────────────────────────────────────
     if (layer.kind !== LayerKind.SMARTOBJECT) {
@@ -159,9 +160,9 @@ export function scriptReplaceSmartObject(
     var origCY = (origTop  + origBottom) / 2;
 
     // ── Verify replacement file ────────────────────────────────────────────
-    var newFile = new File("${escapedFile}");
+    var newFile = new File(${fileLiteral});
     if (!newFile.exists) {
-      throw new Error('Replacement file not found: "${escapedFile}"');
+      throw new Error('Replacement file not found: ' + ${fileLiteral});
     }
 
     // ── Replace smart object content ───────────────────────────────────────
@@ -215,8 +216,8 @@ export function scriptReplaceSmartObject(
     return {
       replaced: true,
       layerName: layer.name,
-      layerPath: "${escapedPath}",
-      newFile: "${escapedFile}",
+      layerPath: ${pathLiteral},
+      newFile: ${fileLiteral},
       fitApplied: fitApplied,
       saved: ${saveAfter},
       originalBounds: {

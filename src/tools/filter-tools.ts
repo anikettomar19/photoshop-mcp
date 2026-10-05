@@ -1,7 +1,7 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
-import { ExtendScriptSnippets } from '../api/extendscript.js';
+import { ExtendScriptSnippets, NOISE_DISTRIBUTIONS } from '../api/extendscript.js';
 
 export function createFilterTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -72,7 +72,7 @@ export function createFilterTools(connection: PhotoshopConnection): ToolDefiniti
             distribution: {
               type: 'string',
               description: 'Noise distribution type',
-              enum: ['UNIFORM', 'GAUSSIAN'],
+              enum: [...NOISE_DISTRIBUTIONS],
               default: 'UNIFORM',
             },
             monochromatic: {
