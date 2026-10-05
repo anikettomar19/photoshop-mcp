@@ -682,9 +682,12 @@ export async function rebuildSpriteIndex(args: Record<string, unknown>): Promise
     // returns one hit per unique image instead of the same art from N folders.
     const { deduped, duplicates, duplicateGroups } = dedupeByContent(sprites);
     saveIndex(indexPath, deduped, duplicates);
-    // Build the nine-slice index from the deduped set (covers Assets/Sprites +
-    // the extra roots nine_slice_matcher.py scans).
-    const nineSliceList = await collectNineSliceSprites(projectRoot, deduped);
+    // Build the nine-slice index from EVERY file, not the deduped set: the
+    // border lives in each file's .meta, so byte-identical copies can differ
+    // (one sliced, one not), and dedup would drop the sliced copy whenever the
+    // canonical has no border. Covers Assets/Sprites + the extra roots
+    // nine_slice_matcher.py scans.
+    const nineSliceList = await collectNineSliceSprites(projectRoot, sprites);
     writeNineSliceIndex(nineSliceIndexPath, nineSliceList);
     const nineSliceCount = nineSliceList.length;
     const duplicateFiles = duplicateGroups.reduce((s, g) => s + g.duplicates.length, 0);
