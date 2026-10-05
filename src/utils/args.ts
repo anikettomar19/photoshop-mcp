@@ -14,7 +14,9 @@ export function requireString(
 ): string {
   const value = args[name];
   if (typeof value !== 'string' || (!options.allowEmpty && value.length === 0)) {
-    throw new Error(`missing or invalid required argument "${name}" (got ${JSON.stringify(value)})`);
+    throw new Error(
+      `missing or invalid required argument "${name}" (got ${JSON.stringify(value)})`
+    );
   }
   return value;
 }
@@ -23,7 +25,9 @@ export function requireString(
 export function requireNumber(args: Record<string, unknown>, name: string): number {
   const value = args[name];
   if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new Error(`missing or invalid required argument "${name}" (got ${JSON.stringify(value)})`);
+    throw new Error(
+      `missing or invalid required argument "${name}" (got ${JSON.stringify(value)})`
+    );
   }
   return value;
 }

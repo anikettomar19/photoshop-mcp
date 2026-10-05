@@ -1,6 +1,7 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
+import { jsxString } from '../utils/jsx.js';
 
 export function createLayerEffectsTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -9,7 +10,7 @@ export function createLayerEffectsTools(connection: PhotoshopConnection): ToolDe
         name: 'photoshop_get_layer_effects',
         description:
           'Read all layer effects (drop shadow, stroke, inner glow, outer glow, color overlay) ' +
-          'from the currently active layer using the Action Manager API. Returns each effect\'s ' +
+          "from the currently active layer using the Action Manager API. Returns each effect's " +
           'enabled state, color (RGB), opacity, size, and other parameters. Works on any layer type.',
         inputSchema: { type: 'object', properties: {} },
       },
@@ -25,14 +26,56 @@ export function createLayerEffectsTools(connection: PhotoshopConnection): ToolDe
         inputSchema: {
           type: 'object',
           properties: {
-            color_r: { type: 'number', description: 'Shadow color R (0-255)', minimum: 0, maximum: 255, default: 0 },
-            color_g: { type: 'number', description: 'Shadow color G (0-255)', minimum: 0, maximum: 255, default: 0 },
-            color_b: { type: 'number', description: 'Shadow color B (0-255)', minimum: 0, maximum: 255, default: 0 },
-            opacity: { type: 'number', description: 'Opacity % (0-100, default 75)', minimum: 0, maximum: 100, default: 75 },
-            angle:   { type: 'number', description: 'Light angle in degrees (default 120)', default: 120 },
-            distance:{ type: 'number', description: 'Shadow distance in pixels (default 5)', default: 5 },
-            size:    { type: 'number', description: 'Shadow size/softness in pixels (default 5)', default: 5 },
-            spread:  { type: 'number', description: 'Shadow spread % (0-100, default 0)', minimum: 0, maximum: 100, default: 0 },
+            color_r: {
+              type: 'number',
+              description: 'Shadow color R (0-255)',
+              minimum: 0,
+              maximum: 255,
+              default: 0,
+            },
+            color_g: {
+              type: 'number',
+              description: 'Shadow color G (0-255)',
+              minimum: 0,
+              maximum: 255,
+              default: 0,
+            },
+            color_b: {
+              type: 'number',
+              description: 'Shadow color B (0-255)',
+              minimum: 0,
+              maximum: 255,
+              default: 0,
+            },
+            opacity: {
+              type: 'number',
+              description: 'Opacity % (0-100, default 75)',
+              minimum: 0,
+              maximum: 100,
+              default: 75,
+            },
+            angle: {
+              type: 'number',
+              description: 'Light angle in degrees (default 120)',
+              default: 120,
+            },
+            distance: {
+              type: 'number',
+              description: 'Shadow distance in pixels (default 5)',
+              default: 5,
+            },
+            size: {
+              type: 'number',
+              description: 'Shadow size/softness in pixels (default 5)',
+              default: 5,
+            },
+            spread: {
+              type: 'number',
+              description: 'Shadow spread % (0-100, default 0)',
+              minimum: 0,
+              maximum: 100,
+              default: 0,
+            },
           },
         },
       },
@@ -47,17 +90,41 @@ export function createLayerEffectsTools(connection: PhotoshopConnection): ToolDe
         inputSchema: {
           type: 'object',
           properties: {
-            size:     { type: 'number', description: 'Stroke width in pixels (default 3)', default: 3 },
+            size: { type: 'number', description: 'Stroke width in pixels (default 3)', default: 3 },
             position: {
               type: 'string',
               enum: ['OUTSIDE', 'INSIDE', 'CENTER'],
               description: 'Stroke position relative to layer edge (default OUTSIDE)',
               default: 'OUTSIDE',
             },
-            color_r: { type: 'number', description: 'Stroke color R (0-255)', minimum: 0, maximum: 255, default: 0 },
-            color_g: { type: 'number', description: 'Stroke color G (0-255)', minimum: 0, maximum: 255, default: 0 },
-            color_b: { type: 'number', description: 'Stroke color B (0-255)', minimum: 0, maximum: 255, default: 0 },
-            opacity: { type: 'number', description: 'Opacity % (0-100, default 100)', minimum: 0, maximum: 100, default: 100 },
+            color_r: {
+              type: 'number',
+              description: 'Stroke color R (0-255)',
+              minimum: 0,
+              maximum: 255,
+              default: 0,
+            },
+            color_g: {
+              type: 'number',
+              description: 'Stroke color G (0-255)',
+              minimum: 0,
+              maximum: 255,
+              default: 0,
+            },
+            color_b: {
+              type: 'number',
+              description: 'Stroke color B (0-255)',
+              minimum: 0,
+              maximum: 255,
+              default: 0,
+            },
+            opacity: {
+              type: 'number',
+              description: 'Opacity % (0-100, default 100)',
+              minimum: 0,
+              maximum: 100,
+              default: 100,
+            },
           },
         },
       },
@@ -66,7 +133,8 @@ export function createLayerEffectsTools(connection: PhotoshopConnection): ToolDe
     {
       tool: {
         name: 'photoshop_remove_layer_effects',
-        description: 'Remove ALL layer effects (styles) from the active layer, leaving the pixel content unchanged.',
+        description:
+          'Remove ALL layer effects (styles) from the active layer, leaving the pixel content unchanged.',
         inputSchema: { type: 'object', properties: {} },
       },
       handler: async () => removeLayerEffects(connection),
@@ -208,7 +276,15 @@ async function getLayerEffects(connection: PhotoshopConnection): Promise<ToolRes
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -216,14 +292,14 @@ async function addDropShadow(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const r        = (args.color_r  as number) ?? 0;
-  const g        = (args.color_g  as number) ?? 0;
-  const b        = (args.color_b  as number) ?? 0;
-  const opacity  = (args.opacity  as number) ?? 75;
-  const angle    = (args.angle    as number) ?? 120;
+  const r = (args.color_r as number) ?? 0;
+  const g = (args.color_g as number) ?? 0;
+  const b = (args.color_b as number) ?? 0;
+  const opacity = (args.opacity as number) ?? 75;
+  const angle = (args.angle as number) ?? 120;
   const distance = (args.distance as number) ?? 5;
-  const size     = (args.size     as number) ?? 5;
-  const spread   = (args.spread   as number) ?? 0;
+  const size = (args.size as number) ?? 5;
+  const spread = (args.spread as number) ?? 0;
   try {
     const api = await new PhotoshopAPIFactory(connection).createAPI();
     const result = await api.executeScript(`
@@ -270,7 +346,15 @@ async function addDropShadow(
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -278,18 +362,18 @@ async function addStrokeEffect(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const size     = (args.size    as number) ?? 3;
+  const size = (args.size as number) ?? 3;
   const position = (args.position as string) ?? 'OUTSIDE';
-  const r        = (args.color_r as number) ?? 0;
-  const g        = (args.color_g as number) ?? 0;
-  const b        = (args.color_b as number) ?? 0;
-  const opacity  = (args.opacity as number) ?? 100;
+  const r = (args.color_r as number) ?? 0;
+  const g = (args.color_g as number) ?? 0;
+  const b = (args.color_b as number) ?? 0;
+  const opacity = (args.opacity as number) ?? 100;
 
   // Map position string → Photoshop frameFXType enum string
   const posMap: Record<string, string> = {
     OUTSIDE: 'OutF',
-    INSIDE:  'InsF',
-    CENTER:  'CtrF',
+    INSIDE: 'InsF',
+    CENTER: 'CtrF',
   };
   const posEnum = posMap[position.toUpperCase()] ?? 'OutF';
 
@@ -327,14 +411,22 @@ async function addStrokeEffect(
         applied: true,
         effect: 'stroke',
         size: ${size},
-        position: '${position}',
+        position: ${jsxString(position)},
         color: { r: ${r}, g: ${g}, b: ${b} },
         opacity: ${opacity}
       };
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -354,6 +446,14 @@ async function removeLayerEffects(connection: PhotoshopConnection): Promise<Tool
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }

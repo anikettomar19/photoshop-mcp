@@ -1,8 +1,10 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
+import { LONG_SCRIPT_TIMEOUT_MS } from '../platform/script-executor.js';
 import { layerPathResolver } from '../api/extendscript.js';
 import { requireString } from '../utils/args.js';
+import { jsxString } from '../utils/jsx.js';
 
 export function createSmartObjectTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -47,7 +49,7 @@ export function createSmartObjectTools(connection: PhotoshopConnection): ToolDef
                 'layer bounds (fit-within, aspect ratio preserved). Due to Photoshop smart object ' +
                 'transform stacking the result is within ~10-15px of the original bounds — suitable ' +
                 'for mockup workflows but not pixel-perfect. ' +
-                'Default: false (Photoshop inherits the previous content\'s transform as-is).',
+                "Default: false (Photoshop inherits the previous content's transform as-is).",
               default: false,
             },
             saveAfter: {
@@ -121,8 +123,8 @@ export function scriptReplaceSmartObject(
   fitToLayer: boolean,
   saveAfter: boolean
 ): string {
-  const escapedPath = layerPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const escapedFile = newFilePath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const pathLiteral = jsxString(layerPath);
+  const fileLiteral = jsxString(newFilePath);
 
   return `
     function cTID(s) { return app.charIDToTypeID(s); }
@@ -135,7 +137,7 @@ export function scriptReplaceSmartObject(
     var doc = app.activeDocument;
 
     // ── Navigate to layer by path ──────────────────────────────────────────
-    var layer = psResolveLayerPath(doc, "${escapedPath}");
+    var layer = psResolveLayerPath(doc, ${pathLiteral});
 
     // ── Validate smart object ──────────────────────────────────────────────
     if (layer.kind !== LayerKind.SMARTOBJECT) {
@@ -159,9 +161,9 @@ export function scriptReplaceSmartObject(
     var origCY = (origTop  + origBottom) / 2;
 
     // ── Verify replacement file ────────────────────────────────────────────
-    var newFile = new File("${escapedFile}");
+    var newFile = new File(${fileLiteral});
     if (!newFile.exists) {
-      throw new Error('Replacement file not found: "${escapedFile}"');
+      throw new Error('Replacement file not found: ' + ${fileLiteral});
     }
 
     // ── Replace smart object content ───────────────────────────────────────
@@ -215,8 +217,8 @@ export function scriptReplaceSmartObject(
     return {
       replaced: true,
       layerName: layer.name,
-      layerPath: "${escapedPath}",
-      newFile: "${escapedFile}",
+      layerPath: ${pathLiteral},
+      newFile: ${fileLiteral},
       fitApplied: fitApplied,
       saved: ${saveAfter},
       originalBounds: {
@@ -235,7 +237,7 @@ async function listSmartObjects(connection: PhotoshopConnection): Promise<ToolRe
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);
     const api = await apiFactory.createAPI();
-    const result = await api.executeScript(scriptListSmartObjects());
+    const result = await api.executeScript(scriptListSmartObjects(), LONG_SCRIPT_TIMEOUT_MS);
 
     return {
       content: [
@@ -271,7 +273,7 @@ async function replaceSmartObject(
     const apiFactory = new PhotoshopAPIFactory(connection);
     const api = await apiFactory.createAPI();
     const script = scriptReplaceSmartObject(layerPath, newFilePath, fitToLayer, saveAfter);
-    const result = await api.executeScript(script);
+    const result = await api.executeScript(script, LONG_SCRIPT_TIMEOUT_MS);
 
     return {
       content: [

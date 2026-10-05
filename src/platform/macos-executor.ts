@@ -1,17 +1,28 @@
-import { exec, spawn } from 'child_process';
+import { execFile, spawn } from 'child_process';
+import { randomUUID } from 'crypto';
 import { promisify } from 'util';
 import { writeFile, unlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Logger } from '../utils/logger.js';
-import { ScriptExecutor } from './script-executor.js';
+import {
+  DEFAULT_SCRIPT_TIMEOUT_MS,
+  ScriptExecutor,
+  SerialQueue,
+  parseScriptOutput,
+  timeoutError,
+} from './script-executor.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+/** Quotes a value for an AppleScript string literal. */
+function appleScriptString(value: string): string {
+  return '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+}
 
 export class MacOSExecutor implements ScriptExecutor {
   private logger: Logger;
-  private scriptQueue: Array<() => Promise<unknown>> = [];
-  private isProcessing = false;
+  private queue = new SerialQueue();
   private appName: string = 'Adobe Photoshop 2025';
 
   constructor() {
@@ -23,161 +34,94 @@ export class MacOSExecutor implements ScriptExecutor {
     this.logger.debug(`App name set to: ${appName}`);
   }
 
-  async execute(script: string, timeout: number = 30000): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        reject(new Error('Script execution timeout'));
-      }, timeout);
-
-      this.scriptQueue.push(async () => {
-        try {
-          const result = await this.executeScript(script);
-          clearTimeout(timeoutId);
-          resolve(result);
-          return result;
-        } catch (error) {
-          clearTimeout(timeoutId);
-          reject(error);
-          throw error;
-        }
-      });
-
-      this.processQueue();
-    });
+  async execute(script: string, timeout: number = DEFAULT_SCRIPT_TIMEOUT_MS): Promise<unknown> {
+    return this.queue.run(() => this.executeScript(script, timeout));
   }
 
-  private async processQueue() {
-    if (this.isProcessing || this.scriptQueue.length === 0) {
-      return;
-    }
-
-    this.isProcessing = true;
-
-    while (this.scriptQueue.length > 0) {
-      const task = this.scriptQueue.shift();
-      if (task) {
-        try {
-          await task();
-        } catch (error) {
-          this.logger.error('Script execution failed:', error);
-        }
-      }
-    }
-
-    this.isProcessing = false;
-  }
-
-  private async executeScript(script: string): Promise<unknown> {
+  private async executeScript(script: string, timeout: number): Promise<unknown> {
     // For macOS, we'll use AppleScript to execute JavaScript in Photoshop
-    const tempScriptPath = join(tmpdir(), `photoshop-script-${Date.now()}.jsx`);
-    const tempAppleScriptPath = join(tmpdir(), `photoshop-applescript-${Date.now()}.scpt`);
+    const id = randomUUID();
+    const tempScriptPath = join(tmpdir(), `photoshop-script-${id}.jsx`);
+    const tempAppleScriptPath = join(tmpdir(), `photoshop-applescript-${id}.scpt`);
 
     try {
       await writeFile(tempScriptPath, script, 'utf8');
 
       // Create AppleScript that tells Photoshop to execute the JSX
-      const appleScript = this.createAppleScriptWrapper(tempScriptPath);
+      const appleScript = this.createAppleScriptWrapper(tempScriptPath, timeout);
       await writeFile(tempAppleScriptPath, appleScript, 'utf8');
 
+      let stdout: string;
       try {
-        // Execute AppleScript via osascript
-        const { stdout, stderr } = await execAsync(`osascript "${tempAppleScriptPath}"`);
-
-        if (stderr) {
-          this.logger.warn('Script execution warning:', stderr);
-        }
-
-        // Parse result
-        return this.parseResult(stdout);
+        // Killing osascript is the only way to stop waiting: Photoshop itself
+        // cannot be interrupted and will finish the script regardless.
+        ({ stdout } = await execFileAsync('osascript', [tempAppleScriptPath], {
+          timeout,
+          killSignal: 'SIGKILL',
+          maxBuffer: 64 * 1024 * 1024,
+        }));
       } catch (error) {
+        const e = error as { killed?: boolean; signal?: string; stderr?: string; message?: string };
+        if (e.killed || e.signal === 'SIGKILL') {
+          throw timeoutError(timeout);
+        }
         this.logger.error('AppleScript execution failed:', error);
-        throw error;
+        throw new Error(e.stderr?.trim() || e.message || String(error));
       } finally {
-        // Cleanup AppleScript file
         await unlink(tempAppleScriptPath).catch(() => {});
       }
+
+      return parseScriptOutput(stdout);
     } finally {
-      // Cleanup JSX file
       await unlink(tempScriptPath).catch(() => {});
     }
   }
 
-  private createAppleScriptWrapper(jsxPath: string): string {
+  private createAppleScriptWrapper(jsxPath: string, timeout: number): string {
     // Use POSIX file path for AppleScript
     const posixPath = jsxPath.replace(/\\/g, '/');
+    // Apple events give up after 120s by default, which would cut long scripts
+    // short regardless of our own timeout; give AppleScript a little headroom
+    // so ours is the one that fires.
+    const seconds = Math.ceil(timeout / 1000) + 10;
 
-    return `tell application "${this.appName}"
-\tdo javascript "$.evalFile('${posixPath}')"
-end tell`;
-  }
-
-  private parseResult(output: string): unknown {
-    const trimmed = output.trim();
-
-    // Try to parse as JSON
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      // Return as string if not JSON
-      return trimmed;
-    }
+    return `with timeout of ${seconds} seconds
+\ttell application ${appleScriptString(this.appName)}
+\t\tdo javascript "$.evalFile('${posixPath}')"
+\tend tell
+end timeout`;
   }
 
   async isPhotoshopRunning(): Promise<boolean> {
+    // Ask AppleScript about this exact app rather than pgrep: "Adobe Photoshop"
+    // also matches helper and crash-reporter processes. "is running" does not
+    // launch the app.
     try {
-      const { stdout } = await execAsync('pgrep -f "Adobe Photoshop"');
-      return stdout.trim().length > 0;
-    } catch (error) {
-      // pgrep returns non-zero exit code if no process found
+      const { stdout } = await execFileAsync('osascript', [
+        '-e',
+        `application ${appleScriptString(this.appName)} is running`,
+      ]);
+      return stdout.trim() === 'true';
+    } catch {
       return false;
     }
   }
 
   async launchPhotoshop(photoshopPath: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.logger.info(`Launching Photoshop: ${photoshopPath}`);
+    this.logger.info(`Launching Photoshop: ${photoshopPath}`);
 
-      // Use 'open' command on macOS to launch the app
-      const child = spawn('open', ['-a', photoshopPath], {
-        detached: true,
-        stdio: 'ignore',
-      });
-
-      child.unref();
-
-      // Wait a bit for Photoshop to start
-      setTimeout(() => {
-        resolve();
-      }, 5000);
-
-      child.on('error', (error) => {
-        reject(new Error(`Failed to launch Photoshop: ${error.message}`));
-      });
+    // Use 'open' command on macOS to launch the app. The caller waits for
+    // Photoshop to answer scripts; 'open' returns as soon as launch starts.
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn('open', ['-a', photoshopPath], { stdio: 'ignore' });
+      child.on('error', (error) =>
+        reject(new Error(`Failed to launch Photoshop: ${error.message}`))
+      );
+      child.on('exit', (code) =>
+        code === 0
+          ? resolve()
+          : reject(new Error(`Failed to launch Photoshop: open exited with ${code}`))
+      );
     });
-  }
-
-  /**
-   * Alternative method using 'do shell script' via AppleScript
-   * This can be more reliable for some versions
-   */
-  async executeViaDoShellScript(script: string): Promise<unknown> {
-    const tempScriptPath = join(tmpdir(), `photoshop-script-${Date.now()}.jsx`);
-    const tempAppleScriptPath = join(tmpdir(), `photoshop-applescript-alt-${Date.now()}.scpt`);
-
-    try {
-      await writeFile(tempScriptPath, script, 'utf8');
-
-      const appleScript = `tell application "${this.appName}"
-\tdo shell script "cat '${tempScriptPath}'"
-end tell`;
-
-      await writeFile(tempAppleScriptPath, appleScript, 'utf8');
-      const { stdout } = await execAsync(`osascript "${tempAppleScriptPath}"`);
-      
-      await unlink(tempAppleScriptPath).catch(() => {});
-      return this.parseResult(stdout);
-    } finally {
-      await unlink(tempScriptPath).catch(() => {});
-    }
   }
 }

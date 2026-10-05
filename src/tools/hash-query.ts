@@ -9,7 +9,10 @@
 import { hashImageFile } from './sprite-hash.js';
 
 const path = process.argv[2];
-if (!path) { process.stderr.write('Usage: hash-query.js <image_path>\n'); process.exit(1); }
+if (!path) {
+  process.stderr.write('Usage: hash-query.js <image_path>\n');
+  process.exit(1);
+}
 
 const h = await hashImageFile(path);
 process.stdout.write(JSON.stringify(h) + '\n');

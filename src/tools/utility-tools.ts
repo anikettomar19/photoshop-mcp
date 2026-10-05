@@ -1,7 +1,9 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
+import { LONG_SCRIPT_TIMEOUT_MS } from '../platform/script-executor.js';
 import { requireString, requireNumber } from '../utils/args.js';
+import { jsxString } from '../utils/jsx.js';
 
 export function createUtilityTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -127,7 +129,8 @@ export function createUtilityTools(connection: PhotoshopConnection): ToolDefinit
             },
             position: {
               type: 'number',
-              description: 'Position in pixels (distance from top for horizontal, from left for vertical)',
+              description:
+                'Position in pixels (distance from top for horizontal, from left for vertical)',
             },
           },
           required: ['orientation', 'position'],
@@ -302,7 +305,15 @@ async function getSessionInfo(connection: PhotoshopConnection): Promise<ToolResu
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -329,7 +340,15 @@ async function getSelectionInfo(connection: PhotoshopConnection): Promise<ToolRe
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -359,7 +378,15 @@ async function sampleColorAtPixel(
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -367,7 +394,7 @@ async function exportLayerAsPng(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const outputPath = requireString(args, 'output_path').replace(/\\/g, '\\\\');
+  const outputPath = requireString(args, 'output_path');
   const trim = args.trim_transparency !== false;
   const applyClip = args.apply_clipping_mask !== false;
   try {
@@ -386,7 +413,7 @@ async function exportLayerAsPng(
     // Parse from the right — layer names may contain '|', doc name is last.
     const detStr = String(detection);
     const docSep = detStr.lastIndexOf('|');
-    const origDocName = detStr.substring(docSep + 1).replace(/"/g, '\\"');
+    const origDocName = detStr.substring(docSep + 1);
     const rest = detStr.substring(0, docSep);
     const sepIdx = rest.lastIndexOf('|');
     const layerName = rest.substring(0, sepIdx);
@@ -412,11 +439,12 @@ async function exportLayerAsPng(
       // runs in a single script. Breaking into sequential steps fixes this.
 
       // Step 1: Duplicate doc, hide all, show target + clip base + ancestors
-      await api.executeScript(`
+      await api.executeScript(
+        `
         ${docByNameJs}
-        var origDoc = docByName("${origDocName}");
-        if (!origDoc) throw new Error('Original document no longer open: ${origDocName}');
-        var dupDoc = origDoc.duplicate('${dupDocName}');
+        var origDoc = docByName(${jsxString(origDocName)});
+        if (!origDoc) throw new Error('Original document no longer open: ' + ${jsxString(origDocName)});
+        var dupDoc = origDoc.duplicate(${jsxString(dupDocName)});
         app.activeDocument = dupDoc;
 
         function hideAll(layers) {
@@ -441,8 +469,8 @@ async function exportLayerAsPng(
           return null;
         }
 
-        var info = findInfo(dupDoc.layers, "${layerName}");
-        if (!info) throw new Error('Layer not found in duplicate: ${layerName}');
+        var info = findInfo(dupDoc.layers, ${jsxString(layerName)});
+        if (!info) throw new Error('Layer not found in duplicate: ' + ${jsxString(layerName)});
 
         info.layer.visible = true;
 
@@ -460,46 +488,55 @@ async function exportLayerAsPng(
         }
 
         return { ready: true, clipBase: clipBase ? clipBase.name : null };
-      `);
+      `,
+        LONG_SCRIPT_TIMEOUT_MS
+      );
 
       // Step 2: Copy Merged (composites visible layers respecting clip mask + shape)
-      await api.executeScript(`
+      await api.executeScript(
+        `
         ${docByNameJs}
-        var dupDoc = docByName("${dupDocName}");
-        if (!dupDoc) throw new Error('Temp document vanished: ${dupDocName}');
+        var dupDoc = docByName(${jsxString(dupDocName)});
+        if (!dupDoc) throw new Error('Temp document vanished: ' + ${jsxString(dupDocName)});
         app.activeDocument = dupDoc;
         dupDoc.selection.selectAll();
         dupDoc.selection.copy(true);
         return { copied: true };
-      `);
+      `,
+        LONG_SCRIPT_TIMEOUT_MS
+      );
 
       // Step 3: Close dup doc, create new transparent doc, paste
-      await api.executeScript(`
+      await api.executeScript(
+        `
         ${docByNameJs}
-        var dupDoc = docByName("${dupDocName}");
-        if (!dupDoc) throw new Error('Temp document vanished: ${dupDocName}');
+        var dupDoc = docByName(${jsxString(dupDocName)});
+        if (!dupDoc) throw new Error('Temp document vanished: ' + ${jsxString(dupDocName)});
         var ow = dupDoc.width;
         var oh = dupDoc.height;
         var ores = dupDoc.resolution;
         dupDoc.close(SaveOptions.DONOTSAVECHANGES);
 
-        var newDoc = app.documents.add(ow, oh, ores, '${pasteDocName}', NewDocumentMode.RGB, DocumentFill.TRANSPARENT);
+        var newDoc = app.documents.add(ow, oh, ores, ${jsxString(pasteDocName)}, NewDocumentMode.RGB, DocumentFill.TRANSPARENT);
         app.activeDocument = newDoc;
         newDoc.paste();
         try { newDoc.selection.deselect(); } catch(e) {}
         return { pasted: true };
-      `);
+      `,
+        LONG_SCRIPT_TIMEOUT_MS
+      );
 
       // Step 4: Trim, save, close, return to original doc — all by name,
       // never via app.activeDocument (user focus changes between scripts).
-      const result = await api.executeScript(`
+      const result = await api.executeScript(
+        `
         ${docByNameJs}
-        var newDoc = docByName("${pasteDocName}");
-        if (!newDoc) throw new Error('Paste document vanished: ${pasteDocName}');
+        var newDoc = docByName(${jsxString(pasteDocName)});
+        if (!newDoc) throw new Error('Paste document vanished: ' + ${jsxString(pasteDocName)});
         app.activeDocument = newDoc;
         ${trim ? `try { newDoc.trim(TrimType.TRANSPARENT, true, true, true, true); } catch(e) {}` : ''}
 
-        var saveFile = new File("${outputPath}");
+        var saveFile = new File(${jsxString(outputPath)});
         var pngOpts = new PNGSaveOptions();
         pngOpts.compression = 6;
         newDoc.saveAs(saveFile, pngOpts, true);
@@ -508,25 +545,27 @@ async function exportLayerAsPng(
         var h = Math.round(newDoc.height.as('px'));
         newDoc.close(SaveOptions.DONOTSAVECHANGES);
 
-        var origDoc = docByName("${origDocName}");
+        var origDoc = docByName(${jsxString(origDocName)});
         if (origDoc) app.activeDocument = origDoc;
 
         return {
           exported: true,
-          layerName: "${layerName}",
-          path: "${outputPath}",
+          layerName: ${jsxString(layerName)},
+          path: ${jsxString(outputPath)},
           width: w,
           height: h,
           trimmed: ${trim},
           clippingApplied: true
         };
-      `);
+      `,
+        LONG_SCRIPT_TIMEOUT_MS
+      );
 
       return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
-
     } else {
       // ── SIMPLE PATH (no clipping mask) ────────────────────────────────
-      const result = await api.executeScript(`
+      const result = await api.executeScript(
+        `
         var origDoc = app.activeDocument;
         var srcLayer = origDoc.activeLayer;
 
@@ -547,7 +586,7 @@ async function exportLayerAsPng(
 
         ${trim ? `try { newDoc.trim(TrimType.TRANSPARENT, true, true, true, true); } catch(e) {}` : ''}
 
-        var saveFile = new File("${outputPath}");
+        var saveFile = new File(${jsxString(outputPath)});
         var pngOpts = new PNGSaveOptions();
         pngOpts.compression = 6;
         newDoc.saveAs(saveFile, pngOpts, true);
@@ -559,18 +598,28 @@ async function exportLayerAsPng(
 
         return {
           exported: true,
-          layerName: "${layerName}",
-          path: "${outputPath}",
+          layerName: ${jsxString(layerName)},
+          path: ${jsxString(outputPath)},
           width: w,
           height: h,
           trimmed: ${trim},
           clippingApplied: false
         };
-      `);
+      `,
+        LONG_SCRIPT_TIMEOUT_MS
+      );
       return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
     }
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -584,7 +633,7 @@ async function duplicateDocument(
     const result = await api.executeScript(`
       if (app.documents.length === 0) throw new Error('No active document');
       var doc = app.activeDocument;
-      var dupName = ${name ? `"${name.replace(/"/g, '\\"')}"` : 'doc.name + " copy"'};
+      var dupName = ${name ? jsxString(name) : 'doc.name + " copy"'};
       var dup = doc.duplicate(dupName);
       return {
         duplicated: true,
@@ -594,7 +643,15 @@ async function duplicateDocument(
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -606,7 +663,7 @@ async function setActiveDocument(
   try {
     const api = await new PhotoshopAPIFactory(connection).createAPI();
     const result = await api.executeScript(`
-      var targetName = "${name.replace(/"/g, '\\"')}";
+      var targetName = ${jsxString(name)};
       for (var i = 0; i < app.documents.length; i++) {
         if (app.documents[i].name === targetName) {
           app.activeDocument = app.documents[i];
@@ -617,7 +674,15 @@ async function setActiveDocument(
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -632,17 +697,25 @@ async function addGuide(
     const result = await api.executeScript(`
       if (app.documents.length === 0) throw new Error('No active document');
       var doc = app.activeDocument;
-      var dir = "${orientation}" === 'HORIZONTAL' ? Direction.HORIZONTAL : Direction.VERTICAL;
+      var dir = ${jsxString(orientation)} === 'HORIZONTAL' ? Direction.HORIZONTAL : Direction.VERTICAL;
       doc.guides.add(dir, new UnitValue(${position}, 'px'));
       return {
         added: true,
-        orientation: "${orientation}",
+        orientation: ${jsxString(orientation)},
         position: ${position}
       };
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -658,7 +731,15 @@ async function clearGuides(connection: PhotoshopConnection): Promise<ToolResult>
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }
 
@@ -686,24 +767,23 @@ export async function batchExportLayers(
 
     // Build the layer configs as a JS literal for injection into ExtendScript
     const configEntries = layers.map((l) => {
-      const path = l.path.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-      const outPath = l.output_path.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       const scale = l.scale_percent ?? 100;
       const clip = l.apply_clipping_mask ?? false;
       const trim = l.trim !== false;
-      return `{path:"${path}",output_path:"${outPath}",scale_percent:${scale},apply_clipping_mask:${clip},trim:${trim}}`;
+      return `{path:${jsxString(l.path)},output_path:${jsxString(l.output_path)},scale_percent:${scale},apply_clipping_mask:${clip},trim:${trim}}`;
     });
     const configArrayStr = '[' + configEntries.join(',') + ']';
 
-    const targetDocName = ((args.document_name as string) || '').replace(/"/g, '\\"');
-    const result = await api.executeScript(`
+    const targetDocName = (args.document_name as string) || '';
+    const result = await api.executeScript(
+      `
       var doc = app.activeDocument;
-      if ("${targetDocName}") {
+      if (${jsxString(targetDocName)}) {
         doc = null;
         for (var di = 0; di < app.documents.length; di++) {
-          if (app.documents[di].name === "${targetDocName}") { doc = app.documents[di]; break; }
+          if (app.documents[di].name === ${jsxString(targetDocName)}) { doc = app.documents[di]; break; }
         }
-        if (!doc) throw new Error('Document not open: ${targetDocName}');
+        if (!doc) throw new Error('Document not open: ' + ${jsxString(targetDocName)});
         app.activeDocument = doc;
       }
       var CONFIGS = ${configArrayStr};
@@ -835,7 +915,9 @@ export async function batchExportLayers(
       }
 
       return results.join('\\n');
-    `);
+    `,
+      LONG_SCRIPT_TIMEOUT_MS
+    );
 
     // Parse pipe-delimited results into structured JSON
     const resultStr = String(result);
@@ -900,10 +982,10 @@ async function applyLevels(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const inputShadow    = (args.input_shadow    as number) ?? 0;
+  const inputShadow = (args.input_shadow as number) ?? 0;
   const inputHighlight = (args.input_highlight as number) ?? 255;
-  const midtoneGamma   = (args.midtone_gamma   as number) ?? 1.0;
-  const outputShadow   = (args.output_shadow   as number) ?? 0;
+  const midtoneGamma = (args.midtone_gamma as number) ?? 1.0;
+  const outputShadow = (args.output_shadow as number) ?? 0;
   const outputHighlight = (args.output_highlight as number) ?? 255;
   try {
     const api = await new PhotoshopAPIFactory(connection).createAPI();
@@ -926,6 +1008,14 @@ async function applyLevels(
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
-    return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 }

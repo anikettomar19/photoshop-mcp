@@ -26,7 +26,9 @@ for (const img of images) {
     results[img] = { text: r.text, confidence: Math.round(r.confidence) };
   } catch (err) {
     results[img] = { text: '', confidence: 0 };
-    process.stderr.write(`OCR failed for ${img}: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(
+      `OCR failed for ${img}: ${err instanceof Error ? err.message : String(err)}\n`
+    );
   }
 }
 

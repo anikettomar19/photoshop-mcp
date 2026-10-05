@@ -1,94 +1,69 @@
-import { exec, spawn } from 'child_process';
+import { execFile, spawn } from 'child_process';
+import { randomUUID } from 'crypto';
 import { promisify } from 'util';
 import { writeFile, unlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Logger } from '../utils/logger.js';
-import { ScriptExecutor } from './script-executor.js';
+import {
+  DEFAULT_SCRIPT_TIMEOUT_MS,
+  ScriptExecutor,
+  SerialQueue,
+  parseScriptOutput,
+  timeoutError,
+} from './script-executor.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export class WindowsExecutor implements ScriptExecutor {
   private logger: Logger;
-  private scriptQueue: Array<() => Promise<unknown>> = [];
-  private isProcessing = false;
+  private queue = new SerialQueue();
 
   constructor() {
     this.logger = new Logger('WindowsExecutor');
   }
 
-  async execute(script: string, timeout: number = 30000): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        reject(new Error('Script execution timeout'));
-      }, timeout);
-
-      this.scriptQueue.push(async () => {
-        try {
-          const result = await this.executeScript(script);
-          clearTimeout(timeoutId);
-          resolve(result);
-          return result;
-        } catch (error) {
-          clearTimeout(timeoutId);
-          reject(error);
-          throw error;
-        }
-      });
-
-      this.processQueue();
-    });
+  async execute(script: string, timeout: number = DEFAULT_SCRIPT_TIMEOUT_MS): Promise<unknown> {
+    return this.queue.run(() => this.executeScript(script, timeout));
   }
 
-  private async processQueue() {
-    if (this.isProcessing || this.scriptQueue.length === 0) {
-      return;
-    }
-
-    this.isProcessing = true;
-
-    while (this.scriptQueue.length > 0) {
-      const task = this.scriptQueue.shift();
-      if (task) {
-        try {
-          await task();
-        } catch (error) {
-          this.logger.error('Script execution failed:', error);
-        }
-      }
-    }
-
-    this.isProcessing = false;
-  }
-
-  private async executeScript(script: string): Promise<unknown> {
+  private async executeScript(script: string, timeout: number): Promise<unknown> {
     // For Windows, we'll use a combination of VBScript/JScript to communicate with Photoshop via COM
     // Write script to temporary file
-    const tempScriptPath = join(tmpdir(), `photoshop-script-${Date.now()}.jsx`);
-    
+    const id = randomUUID();
+    const tempScriptPath = join(tmpdir(), `photoshop-script-${id}.jsx`);
+    const vbsPath = join(tmpdir(), `photoshop-vbs-${id}.vbs`);
+
     try {
       await writeFile(tempScriptPath, script, 'utf8');
 
       // Use VBScript to execute the JSX script via COM
-      const vbsScript = this.createVBSWrapper(tempScriptPath);
-      const vbsPath = join(tmpdir(), `photoshop-vbs-${Date.now()}.vbs`);
-      
-      await writeFile(vbsPath, vbsScript, 'utf8');
+      await writeFile(vbsPath, this.createVBSWrapper(tempScriptPath), 'utf8');
 
+      let stdout: string;
       try {
-        // Execute VBScript
-        const { stdout, stderr } = await execAsync(`cscript //nologo "${vbsPath}"`);
-        
-        if (stderr) {
-          this.logger.warn('Script execution warning:', stderr);
+        // Killing cscript is the only way to stop waiting: Photoshop itself
+        // cannot be interrupted and will finish the script regardless.
+        ({ stdout } = await execFileAsync('cscript', ['//nologo', vbsPath], {
+          timeout,
+          maxBuffer: 64 * 1024 * 1024,
+        }));
+      } catch (error) {
+        const e = error as { killed?: boolean; stdout?: string; stderr?: string; message?: string };
+        if (e.killed) {
+          throw timeoutError(timeout);
         }
-
-        // Parse result
-        return this.parseResult(stdout);
+        // The VBS wrapper reports failures on stdout with a non-zero exit.
+        if (e.stdout?.trim().startsWith('ERROR:')) {
+          return parseScriptOutput(e.stdout);
+        }
+        throw new Error(e.stderr?.trim() || e.message || String(error));
       } finally {
         // Cleanup VBS file
         await unlink(vbsPath).catch(() => {});
       }
+
+      return parseScriptOutput(stdout);
     } finally {
       // Cleanup JSX file
       await unlink(tempScriptPath).catch(() => {});
@@ -119,50 +94,27 @@ End If
 `.trim();
   }
 
-  private parseResult(output: string): unknown {
-    const trimmed = output.trim();
-    
-    // Check for error
-    if (trimmed.startsWith('ERROR:')) {
-      throw new Error(trimmed.substring(6).trim());
-    }
-
-    // Try to parse as JSON
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      // Return as string if not JSON
-      return trimmed;
-    }
-  }
-
   async isPhotoshopRunning(): Promise<boolean> {
     try {
-      const { stdout } = await execAsync('tasklist /FI "IMAGENAME eq Photoshop.exe"');
+      const { stdout } = await execFileAsync('tasklist', ['/FI', 'IMAGENAME eq Photoshop.exe']);
       return stdout.toLowerCase().includes('photoshop.exe');
-    } catch (error) {
+    } catch {
       return false;
     }
   }
 
   async launchPhotoshop(photoshopPath: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.logger.info(`Launching Photoshop: ${photoshopPath}`);
+    this.logger.info(`Launching Photoshop: ${photoshopPath}`);
 
-      const child = spawn(photoshopPath, [], {
-        detached: true,
-        stdio: 'ignore',
-      });
-
-      child.unref();
-
-      // Wait a bit for Photoshop to start
-      setTimeout(() => {
+    // The caller waits for Photoshop to answer scripts; this only starts it.
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(photoshopPath, [], { detached: true, stdio: 'ignore' });
+      child.on('error', (error) =>
+        reject(new Error(`Failed to launch Photoshop: ${error.message}`))
+      );
+      child.on('spawn', () => {
+        child.unref();
         resolve();
-      }, 5000);
-
-      child.on('error', (error) => {
-        reject(new Error(`Failed to launch Photoshop: ${error.message}`));
       });
     });
   }

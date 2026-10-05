@@ -1,8 +1,11 @@
 import { parentPort, workerData } from 'worker_threads';
 import { Jimp } from 'jimp';
 import {
-  computePhash, computeHsvHistogram, computeAlphaHash,
-  computeNineSliceGeom, readSpriteBorder,
+  computePhash,
+  computeHsvHistogram,
+  computeAlphaHash,
+  computeNineSliceGeom,
+  readSpriteBorder,
 } from './sprite-hash.js';
 
 // ---------------------------------------------------------------------------

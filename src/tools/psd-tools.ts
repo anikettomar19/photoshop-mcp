@@ -80,7 +80,8 @@ export function createPsdTools(): ToolDefinition[] {
       handler: async (args) => {
         const psdPath = requireString(args, 'psd_path');
         const layerPath = requireString(args, 'layer_path');
-        const outputPath = (args['output_path'] as string | undefined) ?? '/tmp/extracted_layer.png';
+        const outputPath =
+          (args['output_path'] as string | undefined) ?? '/tmp/extracted_layer.png';
 
         try {
           const output = await runPython([psdPath, layerPath, outputPath]);
@@ -95,7 +96,7 @@ export function createPsdTools(): ToolDefinition[] {
       tool: {
         name: 'photoshop_extract_layer_fx',
         description:
-          'Read a layer\'s stroke and drop-shadow effects from a PSD file and return the ' +
+          "Read a layer's stroke and drop-shadow effects from a PSD file and return the " +
           'equivalent Unity TMPInstancingUtil property values (m_OutlineColor, m_OutlineThickness, ' +
           'm_UnderlayColor, m_OffsetX/Y, m_UnderlayDilate, m_UnderlaySoftness). ' +
           'Does not require Photoshop to be open.',

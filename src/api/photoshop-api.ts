@@ -6,8 +6,11 @@ export type APIType = 'UXP' | 'ExtendScript';
 export interface PhotoshopAPI {
   /**
    * Execute a script using the appropriate API
+   * @param timeout - Milliseconds to allow once the script starts. Defaults to
+   *   DEFAULT_SCRIPT_TIMEOUT_MS; pass LONG_SCRIPT_TIMEOUT_MS for whole-document
+   *   walks and multi-layer exports.
    */
-  executeScript(script: string): Promise<unknown>;
+  executeScript(script: string, timeout?: number): Promise<unknown>;
 
   /**
    * Get the API type being used
@@ -26,14 +29,14 @@ export class PhotoshopAPIFactory {
 
   async createAPI(): Promise<PhotoshopAPI> {
     const info = this.connection.getPhotoshopInfo();
-    
+
     if (!info) {
       throw new Error('Photoshop info not available. Please detect Photoshop first.');
     }
 
     // Determine which API to use based on version
     const apiType = this.determineAPIType(info.version);
-    
+
     this.logger.info(`Creating ${apiType} API for Photoshop version ${info.version}`);
 
     if (apiType === 'UXP') {
@@ -47,8 +50,10 @@ export class PhotoshopAPIFactory {
     // IMPORTANT: When running scripts via AppleScript/COM, we can only use ExtendScript
     // UXP is only available for plugins, not for external script execution
     // Therefore, we always use ExtendScript for external automation
-    
-    this.logger.debug(`Using ExtendScript for version ${version} (UXP not available for external scripting)`);
+
+    this.logger.debug(
+      `Using ExtendScript for version ${version} (UXP not available for external scripting)`
+    );
     return 'ExtendScript';
   }
 }
@@ -65,10 +70,10 @@ class UXPPhotoshopAPI implements PhotoshopAPI {
     this.connection = connection;
   }
 
-  async executeScript(script: string): Promise<unknown> {
+  async executeScript(script: string, timeout?: number): Promise<unknown> {
     // UXP cannot be executed externally via AppleScript/COM
     // Fall back to ExtendScript
-    return await this.connection.executeScript(script);
+    return await this.connection.executeScript(script, timeout);
   }
 
   getAPIType(): APIType {
@@ -86,10 +91,10 @@ class ExtendScriptPhotoshopAPI implements PhotoshopAPI {
     this.connection = connection;
   }
 
-  async executeScript(script: string): Promise<unknown> {
+  async executeScript(script: string, timeout?: number): Promise<unknown> {
     // Wrap script in error handling
     const wrappedScript = this.wrapInErrorHandling(script);
-    return await this.connection.executeScript(wrappedScript);
+    return await this.connection.executeScript(wrappedScript, timeout);
   }
 
   private wrapInErrorHandling(script: string): string {

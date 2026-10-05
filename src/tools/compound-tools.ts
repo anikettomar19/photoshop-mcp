@@ -4,6 +4,8 @@ import { Jimp } from 'jimp';
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
+import { LONG_SCRIPT_TIMEOUT_MS } from '../platform/script-executor.js';
+import { layerPathResolver } from '../api/extendscript.js';
 import { computePhash, computeHsvHistogram, computeAlphaHash } from './sprite-hash.js';
 import {
   SpriteEntry,
@@ -14,33 +16,19 @@ import {
   getProjectPaths,
 } from './sprite-tools.js';
 import { requireString } from '../utils/args.js';
+import { jsxString } from '../utils/jsx.js';
 import { batchExportLayers } from './utility-tools.js';
 import { scriptReplaceSmartObject } from './smart-object-tools.js';
 
 // ── ExtendScript helpers ──────────────────────────────────────────────────────
 
 function scriptGetLayerBounds(layerPath: string): string {
-  const escapedPath = layerPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const pathLiteral = jsxString(layerPath);
   return `
+    ${layerPathResolver}
     if (!app.documents.length) throw new Error('No active document');
     var doc = app.activeDocument;
-    var parts = "${escapedPath}".split('/');
-    var collection = doc.layers;
-    var layer = null;
-    for (var p = 0; p < parts.length; p++) {
-      var found = false;
-      for (var i = 0; i < collection.length; i++) {
-        if (collection[i].name === parts[p]) {
-          layer = collection[i]; found = true;
-          if (p < parts.length - 1) {
-            if (layer.typename !== 'LayerSet') throw new Error('Not a group: "' + parts[p] + '"');
-            collection = layer.layers;
-          }
-          break;
-        }
-      }
-      if (!found) throw new Error('Layer not found: "' + parts[p] + '"');
-    }
+    var layer = psResolveLayerPath(doc, ${pathLiteral});
     doc.activeLayer = layer;
     var b = layer.bounds;
     return {
@@ -56,7 +44,7 @@ function scriptGetLayerBounds(layerPath: string): string {
 }
 
 function scriptGetLayerTreeWithRT(scaleFactor: number, groupFilter: string): string {
-  const escapedFilter = groupFilter.replace(/"/g, '\\"');
+  const filterLiteral = jsxString(groupFilter);
 
   return `
     if (!app.documents.length) throw new Error('No active document');
@@ -123,13 +111,13 @@ function scriptGetLayerTreeWithRT(scaleFactor: number, groupFilter: string): str
     var rootBounds = [0, 0, docW, docH];
 
     // If groupFilter is set, scope to that group
-    if ("${escapedFilter}") {
+    if (${filterLiteral}) {
       var found = null;
       for (var i = 0; i < doc.layers.length; i++) {
-        if (doc.layers[i].name === "${escapedFilter}") { found = doc.layers[i]; break; }
+        if (doc.layers[i].name === ${filterLiteral}) { found = doc.layers[i]; break; }
       }
-      if (!found) throw new Error('Group not found: "${escapedFilter}"');
-      if (found.typename !== 'LayerSet') throw new Error('"${escapedFilter}" is not a group');
+      if (!found) throw new Error('Group not found: ' + ${filterLiteral});
+      if (found.typename !== 'LayerSet') throw new Error(${filterLiteral} + ' is not a group');
       var fb = found.bounds;
       rootCollection = found.layers;
       rootBounds = [fb[0].as('px'), fb[1].as('px'), fb[2].as('px'), fb[3].as('px')];
@@ -139,8 +127,8 @@ function scriptGetLayerTreeWithRT(scaleFactor: number, groupFilter: string): str
       documentName: doc.name,
       documentSize: { width: Math.round(docW), height: Math.round(docH) },
       scaleFactor: sf,
-      groupFilter: "${escapedFilter}",
-      layers: walkLayers(rootCollection, "${escapedFilter}", rootBounds, 0)
+      groupFilter: ${filterLiteral},
+      layers: walkLayers(rootCollection, ${filterLiteral}, rootBounds, 0)
     };
   `;
 }
@@ -155,13 +143,23 @@ function flattenToLeaves(
   for (const layer of layers) {
     if (layer.type === 'GROUP') {
       if (includeGroups) {
-        out.push({ name: layer.name, path: layer.path, bounds: layer.bounds, unityRT: layer.unityRT });
+        out.push({
+          name: layer.name,
+          path: layer.path,
+          bounds: layer.bounds,
+          unityRT: layer.unityRT,
+        });
       }
       if (layer.children?.length) {
         out.push(...flattenToLeaves(layer.children, includeGroups));
       }
     } else {
-      out.push({ name: layer.name, path: layer.path, bounds: layer.bounds, unityRT: layer.unityRT });
+      out.push({
+        name: layer.name,
+        path: layer.path,
+        bounds: layer.bounds,
+        unityRT: layer.unityRT,
+      });
     }
   }
   return out;
@@ -201,7 +199,9 @@ async function extractSpriteToCatalog(
   const theme = (args.theme as string | undefined) ?? '';
   const notes = (args.notes as string | undefined) ?? '';
   const usedIn = ((args.usedIn as string | undefined) ?? '')
-    .split(',').map((s) => s.trim()).filter(Boolean);
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   const trimTransparency = (args.trimTransparency as boolean | undefined) ?? true;
   const addToIndex = (args.addToIndex as boolean | undefined) ?? true;
 
@@ -219,7 +219,15 @@ async function extractSpriteToCatalog(
 
     // ── 2. Export via batchExportLayers (battle-tested, no PS dialog issues) ─
     const exportResult = await batchExportLayers(connection, {
-      layers: [{ path: layerPath, output_path: outputPath, scale_percent: 100, trim: trimTransparency, apply_clipping_mask: false }],
+      layers: [
+        {
+          path: layerPath,
+          output_path: outputPath,
+          scale_percent: 100,
+          trim: trimTransparency,
+          apply_clipping_mask: false,
+        },
+      ],
     });
     if (exportResult.isError) {
       throw new Error((exportResult.content[0] as any).text);
@@ -299,7 +307,7 @@ async function prepUiForUnity(
     // ── 1. Switch to target document if specified ─────────────────────────────
     if (documentName) {
       await api.executeScript(`
-        var n = "${documentName.replace(/"/g, '\\"')}";
+        var n = ${jsxString(documentName)};
         for (var i = 0; i < app.documents.length; i++) {
           if (app.documents[i].name === n) { app.activeDocument = app.documents[i]; break; }
         }
@@ -308,7 +316,7 @@ async function prepUiForUnity(
 
     // ── 2. Get full layer tree with RT values in one ExtendScript call ────────
     const treeScript = scriptGetLayerTreeWithRT(scaleFactor, groupFilter);
-    const tree = (await api.executeScript(treeScript)) as {
+    const tree = (await api.executeScript(treeScript, LONG_SCRIPT_TIMEOUT_MS)) as {
       documentName: string;
       documentSize: { width: number; height: number };
       scaleFactor: number;
@@ -364,9 +372,7 @@ async function prepUiForUnity(
     // ── 6. Build and write manifest ───────────────────────────────────────────
     const manifest = leaves.map((layer) => {
       const pngPath = join(exportDir, `${sanitise(layer.name)}.png`);
-      const layerResult = batchSummary?.results?.find?.(
-        (r: any) => r.path === layer.path
-      );
+      const layerResult = batchSummary?.results?.find?.((r: any) => r.path === layer.path);
       return {
         name: layer.name,
         path: layer.path,
@@ -434,11 +440,11 @@ async function swapMockupAsset(
   args: Record<string, unknown>
 ): Promise<ToolResult> {
   const smartObjectPath = requireString(args, 'smartObjectPath');
-  const newAssetPath    = requireString(args, 'newAssetPath');
-  const fitToLayer      = (args.fitToLayer  as boolean | undefined) ?? true;
-  const saveAfter       = (args.saveAfter   as boolean | undefined) ?? false;
+  const newAssetPath = requireString(args, 'newAssetPath');
+  const fitToLayer = (args.fitToLayer as boolean | undefined) ?? true;
+  const saveAfter = (args.saveAfter as boolean | undefined) ?? false;
   const exportPreviewPath = args.exportPreviewPath as string | undefined;
-  const documentName    = (args.documentName as string | undefined) ?? '';
+  const documentName = (args.documentName as string | undefined) ?? '';
 
   try {
     const api = await new PhotoshopAPIFactory(connection).createAPI();
@@ -446,7 +452,7 @@ async function swapMockupAsset(
     // ── 1. Switch to target document if specified ─────────────────────────────
     if (documentName) {
       await api.executeScript(`
-        var n = "${documentName.replace(/"/g, '\\"')}";
+        var n = ${jsxString(documentName)};
         for (var i = 0; i < app.documents.length; i++) {
           if (app.documents[i].name === n) { app.activeDocument = app.documents[i]; break; }
         }
@@ -454,15 +460,34 @@ async function swapMockupAsset(
     }
 
     // ── 2. Replace smart object content ──────────────────────────────────────
-    const replaceScript = scriptReplaceSmartObject(smartObjectPath, newAssetPath, fitToLayer, saveAfter);
-    const replaceResult = (await api.executeScript(replaceScript)) as {
+    const replaceScript = scriptReplaceSmartObject(
+      smartObjectPath,
+      newAssetPath,
+      fitToLayer,
+      saveAfter
+    );
+    const replaceResult = (await api.executeScript(replaceScript, LONG_SCRIPT_TIMEOUT_MS)) as {
       replaced: boolean;
-      layerName: string;       // NEW name Photoshop assigned (matches the asset filename)
+      layerName: string; // NEW name Photoshop assigned (matches the asset filename)
       layerPath: string;
       fitApplied: boolean;
       saved: boolean;
-      originalBounds: { left: number; top: number; right: number; bottom: number; width: number; height: number };
-      finalBounds:    { left: number; top: number; right: number; bottom: number; width: number; height: number };
+      originalBounds: {
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+        width: number;
+        height: number;
+      };
+      finalBounds: {
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+        width: number;
+        height: number;
+      };
     };
 
     // ── 3. Export preview PNG (optional) ─────────────────────────────────────
@@ -477,7 +502,15 @@ async function swapMockupAsset(
       const updatedPath = pathSegments.join('/');
 
       const batchResult = await batchExportLayers(connection, {
-        layers: [{ path: updatedPath, output_path: exportPreviewPath, scale_percent: 100, trim: false, apply_clipping_mask: false }],
+        layers: [
+          {
+            path: updatedPath,
+            output_path: exportPreviewPath,
+            scale_percent: 100,
+            trim: false,
+            apply_clipping_mask: false,
+          },
+        ],
         document_name: documentName || undefined,
       });
 
@@ -486,9 +519,15 @@ async function swapMockupAsset(
           const batchData = JSON.parse((batchResult.content[0] as any).text);
           const layerResult = batchData?.results?.[0];
           if (layerResult?.status === 'OK') {
-            previewResult = { exportedPath: exportPreviewPath, width: layerResult.width, height: layerResult.height };
+            previewResult = {
+              exportedPath: exportPreviewPath,
+              width: layerResult.width,
+              height: layerResult.height,
+            };
           }
-        } catch { /* non-fatal */ }
+        } catch {
+          /* non-fatal */
+        }
       }
     }
 
@@ -585,7 +624,8 @@ export function createCompoundTools(connection: PhotoshopConnection): ToolDefini
             },
             project_root: {
               type: 'string',
-              description: 'Absolute path to Unity project root (overrides UNITY_PROJECT_ROOT env).',
+              description:
+                'Absolute path to Unity project root (overrides UNITY_PROJECT_ROOT env).',
             },
           },
           required: ['layerPath', 'outputPath', 'intent'],
@@ -640,8 +680,7 @@ export function createCompoundTools(connection: PhotoshopConnection): ToolDefini
             manifestPath: {
               type: 'string',
               description:
-                'Output path for the JSON manifest. ' +
-                'Default: {exportDir}/unity_manifest.json.',
+                'Output path for the JSON manifest. ' + 'Default: {exportDir}/unity_manifest.json.',
             },
           },
           required: ['exportDir'],
@@ -653,11 +692,11 @@ export function createCompoundTools(connection: PhotoshopConnection): ToolDefini
       tool: {
         name: 'photoshop_swap_mockup_asset',
         description:
-          'Compound tool: replace a smart object\'s content with a new asset and optionally ' +
+          "Compound tool: replace a smart object's content with a new asset and optionally " +
           'export a preview PNG — all in one call. ' +
           'Replaces the 3-step sequence of list_smart_objects → replace_smart_object → batch_export_layers. ' +
           'Use this for the common TechArt workflow: "swap this icon/texture into the mockup and show me the result." ' +
-          'Note: Photoshop renames the layer to the new asset\'s filename after replacement — ' +
+          "Note: Photoshop renames the layer to the new asset's filename after replacement — " +
           'this is expected behavior, not a bug. The new layer name is returned in the result.',
         inputSchema: {
           type: 'object',

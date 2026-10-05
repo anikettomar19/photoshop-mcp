@@ -86,12 +86,7 @@ export function computePhash(img: JimpImage, hashSize = 8): number[] {
 /**
  * Normalized HSV histogram over non-transparent pixels (read-only on `img`).
  */
-export function computeHsvHistogram(
-  img: JimpImage,
-  hBins = 32,
-  sBins = 8,
-  vBins = 8
-): number[] {
+export function computeHsvHistogram(img: JimpImage, hBins = 32, sBins = 8, vBins = 8): number[] {
   const { data } = img.bitmap;
   const hist = new Array<number>(hBins + sBins + vBins).fill(0);
   let count = 0;
@@ -111,9 +106,9 @@ export function computeHsvHistogram(
 
     let h = 0;
     if (delta > 0) {
-      if (mx === r)      h = ((g - b) / delta) % 6;
+      if (mx === r) h = ((g - b) / delta) % 6;
       else if (mx === g) h = (b - r) / delta + 2;
-      else               h = (r - g) / delta + 4;
+      else h = (r - g) / delta + 4;
       h = h / 6;
       if (h < 0) h += 1;
     }
@@ -158,25 +153,42 @@ export function computeNineSliceGeom(img: JimpImage): NineSliceGeom {
   let corner_radius = 0;
   if (width >= 4 && height >= 4) {
     let left = 0;
-    for (let x = 0; x < width; x++) { if (alphaAt(x, 0) > 128) { left = x; break; } }
+    for (let x = 0; x < width; x++) {
+      if (alphaAt(x, 0) > 128) {
+        left = x;
+        break;
+      }
+    }
     let top = 0;
-    for (let y = 0; y < height; y++) { if (alphaAt(0, y) > 128) { top = y; break; } }
+    for (let y = 0; y < height; y++) {
+      if (alphaAt(0, y) > 128) {
+        top = y;
+        break;
+      }
+    }
     corner_radius = (left + top) / 2.0;
   }
 
   // dominant_color: mean RGB of opaque pixels in the centre crop [h/4..h-h/4, w/4..w-w/4].
   const cy = Math.max(1, Math.floor(height / 4));
   const cx = Math.max(1, Math.floor(width / 4));
-  let sr = 0, sg = 0, sb = 0, count = 0;
+  let sr = 0,
+    sg = 0,
+    sb = 0,
+    count = 0;
   for (let y = cy; y < height - cy; y++) {
     for (let x = cx; x < width - cx; x++) {
       const i = (y * width + x) * 4;
-      if (data[i + 3] > 128) { sr += data[i]; sg += data[i + 1]; sb += data[i + 2]; count++; }
+      if (data[i + 3] > 128) {
+        sr += data[i];
+        sg += data[i + 1];
+        sb += data[i + 2];
+        count++;
+      }
     }
   }
-  const dominant_color = count < 10
-    ? null
-    : [Math.trunc(sr / count), Math.trunc(sg / count), Math.trunc(sb / count)];
+  const dominant_color =
+    count < 10 ? null : [Math.trunc(sr / count), Math.trunc(sg / count), Math.trunc(sb / count)];
 
   return { corner_radius, dominant_color };
 }
@@ -206,10 +218,17 @@ export function readSpriteBorder(absPath: string): [number, number, number, numb
   if (!existsSync(metaPath)) return undefined;
   try {
     const content = readFileSync(metaPath, 'utf8');
-    const m = content.match(/spriteBorder:\s*\{x:\s*([\d.]+),\s*y:\s*([\d.]+),\s*z:\s*([\d.]+),\s*w:\s*([\d.]+)\}/);
+    const m = content.match(
+      /spriteBorder:\s*\{x:\s*([\d.]+),\s*y:\s*([\d.]+),\s*z:\s*([\d.]+),\s*w:\s*([\d.]+)\}/
+    );
     if (!m) return undefined;
-    const border: [number, number, number, number] = [parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3]), parseFloat(m[4])];
-    if (border.every(v => v === 0)) return undefined;
+    const border: [number, number, number, number] = [
+      parseFloat(m[1]),
+      parseFloat(m[2]),
+      parseFloat(m[3]),
+      parseFloat(m[4]),
+    ];
+    if (border.every((v) => v === 0)) return undefined;
     return border;
   } catch {
     return undefined;

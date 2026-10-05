@@ -38,7 +38,7 @@ export class Session {
     try {
       this.logger.info('Connecting to Photoshop...');
       const connected = await this.connection.ping();
-      
+
       if (connected) {
         this.isConnected = true;
         this.updateActivity();
@@ -58,10 +58,10 @@ export class Session {
 
   async reconnect(): Promise<boolean> {
     this.logger.info('Attempting to reconnect...');
-    
+
     for (let attempt = 1; attempt <= (this.config.reconnectAttempts || 3); attempt++) {
       this.logger.debug(`Reconnect attempt ${attempt}/${this.config.reconnectAttempts}`);
-      
+
       const connected = await this.connect();
       if (connected) {
         return true;

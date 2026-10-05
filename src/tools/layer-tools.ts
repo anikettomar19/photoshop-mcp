@@ -1,6 +1,7 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
+import { LONG_SCRIPT_TIMEOUT_MS } from '../platform/script-executor.js';
 import { ExtendScriptSnippets } from '../api/extendscript.js';
 import { requireString } from '../utils/args.js';
 
@@ -68,7 +69,8 @@ export function createLayerTools(connection: PhotoshopConnection): ToolDefinitio
     {
       tool: {
         name: 'photoshop_fill_layer',
-        description: 'Fill the active layer with a color',
+        description:
+          'Fill the active layer with a color. Fills only the current selection if there is one.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -350,7 +352,7 @@ async function getLayerTree(
     const path = typeof args?.path === 'string' ? args.path : undefined;
     const maxDepth = typeof args?.max_depth === 'number' ? args.max_depth : undefined;
     const script = ExtendScriptSnippets.getLayerTree(path, maxDepth);
-    const result = await api.executeScript(script);
+    const result = await api.executeScript(script, LONG_SCRIPT_TIMEOUT_MS);
 
     return {
       content: [

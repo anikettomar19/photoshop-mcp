@@ -5,10 +5,7 @@
 // eslint-disable-next-line @typescript-eslint/no-deprecated
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  ListToolsRequestSchema,
-  CallToolRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
+import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Logger } from '../utils/logger.js';
 import { ToolRegistry } from './tool-registry.js';
 import { Session } from './session.js';
@@ -88,7 +85,7 @@ export class PhotoshopMCPServer {
 
     // Register feature tools
     const connection = this.session.getConnection();
-    
+
     const documentTools = createDocumentTools(connection);
     documentTools.forEach((tool) => {
       this.toolRegistry.register(tool.tool.name, tool);
@@ -209,14 +206,14 @@ export class PhotoshopMCPServer {
     // Handle tool calls
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       this.logger.debug(`Tool called: ${request.params.name}`);
-      
+
       try {
         const args = (request.params.arguments as Record<string, unknown>) || {};
         const result = await this.toolRegistry.execute(request.params.name, args);
-        
+
         // Update session activity
         this.session.updateActivity();
-        
+
         return result;
       } catch (error) {
         this.logger.error(`Tool execution failed: ${request.params.name}`, error);
@@ -268,7 +265,7 @@ export class PhotoshopMCPServer {
     // Connect server transport
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    
+
     this.logger.info('MCP Server connected via stdio');
   }
 

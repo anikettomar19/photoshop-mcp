@@ -1,10 +1,11 @@
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { access, constants, readFile } from 'fs/promises';
 import { Logger } from '../utils/logger.js';
 import { PhotoshopInfo } from './connection.js';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export class MacOSDetector {
   private logger: Logger;
@@ -98,7 +99,7 @@ export class MacOSDetector {
 
       // Get version from Info.plist
       const version = await this.extractVersionFromApp(cleanPath);
-      
+
       // Extract app name from path
       const appName = cleanPath.split('/').pop()?.replace('.app', '') || 'Adobe Photoshop 2025';
 
@@ -110,7 +111,7 @@ export class MacOSDetector {
         isRunning: await this.checkIfRunning(cleanPath),
         appName,
       };
-    } catch (error) {
+    } catch {
       return null;
     }
   }
@@ -119,25 +120,25 @@ export class MacOSDetector {
     try {
       // Try to read version from Info.plist
       const plistPath = `${appPath}/Contents/Info.plist`;
-      
+
       try {
         await access(plistPath, constants.F_OK);
-        
+
         // Use PlistBuddy to extract version
         const { stdout: version } = await execAsync(
           `/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${plistPath}"`
         );
-        
+
         if (version.trim()) {
           return version.trim();
         }
-      } catch (error) {
+      } catch {
         // PlistBuddy failed, try parsing manually
         const content = await readFile(plistPath, 'utf8');
         const versionMatch = content.match(
           /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/
         );
-        
+
         if (versionMatch) {
           return versionMatch[1];
         }
@@ -160,11 +161,15 @@ export class MacOSDetector {
       // Get the app name from path
       const appName = appPath.split('/').pop()?.replace('.app', '') || 'Adobe Photoshop';
 
-      // Use pgrep to check if process is running
-      const { stdout } = await execAsync(`pgrep -f "${appName}"`);
-      return stdout.trim().length > 0;
-    } catch (error) {
-      // pgrep returns non-zero exit code if no process found
+      // Ask AppleScript about this exact app: pgrep -f "Adobe Photoshop" also
+      // matches helper and crash-reporter processes.
+      const quoted = '"' + appName.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+      const { stdout } = await execFileAsync('osascript', [
+        '-e',
+        `application ${quoted} is running`,
+      ]);
+      return stdout.trim() === 'true';
+    } catch {
       return false;
     }
   }
@@ -176,7 +181,7 @@ export class MacOSDetector {
         `/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "${plistPath}"`
       );
       return stdout.trim();
-    } catch (error) {
+    } catch {
       return null;
     }
   }
