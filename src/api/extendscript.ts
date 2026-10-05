@@ -47,6 +47,28 @@ export const TEXT_JUSTIFICATIONS = [
   'FULLYJUSTIFIED',
 ] as const;
 
+export const RESAMPLE_METHODS = [
+  'BICUBIC',
+  'BICUBICSHARPER',
+  'BICUBICSMOOTHER',
+  'BILINEAR',
+  'NEARESTNEIGHBOR',
+  'PRESERVEDETAILS',
+  'AUTOMATIC',
+] as const;
+
+export const ANCHOR_POSITIONS = [
+  'TOPLEFT',
+  'TOPCENTER',
+  'TOPRIGHT',
+  'MIDDLELEFT',
+  'MIDDLECENTER',
+  'MIDDLERIGHT',
+  'BOTTOMLEFT',
+  'BOTTOMCENTER',
+  'BOTTOMRIGHT',
+] as const;
+
 const NEW_DOCUMENT_MODES = [
   'NewDocumentMode.RGB',
   'NewDocumentMode.CMYK',
@@ -477,20 +499,49 @@ export const ExtendScriptSnippets = {
   /**
    * Resize image
    */
-  resizeImage: (width: number, height: number) => `
+  resizeImage: (width?: number, height?: number, resample = 'BICUBIC') => `
     if (app.documents.length === 0) {
       throw new Error('No active document');
     }
     var doc = app.activeDocument;
+    var ow = doc.width.as('px'), oh = doc.height.as('px');
+    var w = ${width ?? 'null'}, h = ${height ?? 'null'};
+    if (w === null && h === null) throw new Error('Pass width, height, or both');
+    // Only one given: keep the aspect ratio, which callers otherwise did by hand.
+    if (w === null) w = Math.round(ow * h / oh);
+    if (h === null) h = Math.round(oh * w / ow);
     doc.resizeImage(
-      UnitValue(${width}, 'px'),
-      UnitValue(${height}, 'px'),
+      UnitValue(w, 'px'),
+      UnitValue(h, 'px'),
       null,
-      ResampleMethod.BICUBIC
+      ResampleMethod.${jsxEnum(resample, RESAMPLE_METHODS, 'resample method')}
     );
-    return { 
-      width: doc.width.as('px'), 
-      height: doc.height.as('px') 
+    return {
+      from: { width: ow, height: oh },
+      width: doc.width.as('px'),
+      height: doc.height.as('px')
+    };
+  `,
+
+  /**
+   * Resize the canvas (no resampling), anchored at a position
+   */
+  resizeCanvas: (width?: number, height?: number, anchor = 'MIDDLECENTER') => `
+    if (app.documents.length === 0) {
+      throw new Error('No active document');
+    }
+    var doc = app.activeDocument;
+    var ow = doc.width.as('px'), oh = doc.height.as('px');
+    var w = ${width ?? 'null'}, h = ${height ?? 'null'};
+    if (w === null && h === null) throw new Error('Pass width, height, or both');
+    if (w === null) w = ow;
+    if (h === null) h = oh;
+    doc.resizeCanvas(UnitValue(w, 'px'), UnitValue(h, 'px'),
+      AnchorPosition.${jsxEnum(anchor, ANCHOR_POSITIONS, 'anchor')});
+    return {
+      from: { width: ow, height: oh },
+      width: doc.width.as('px'),
+      height: doc.height.as('px')
     };
   `,
 
