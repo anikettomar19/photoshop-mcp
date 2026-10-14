@@ -133,6 +133,47 @@ export function createLayerEffectsTools(connection: PhotoshopConnection): ToolDe
     },
     {
       tool: {
+        name: 'photoshop_add_gradient_overlay',
+        description:
+          'Add or replace the gradient overlay effect on the active layer (works on shape layers, ' +
+          'so the fill stays editable). Give 2+ colour stops as hex with a location 0-100, an angle ' +
+          '(90 = bottom-to-top), a type (LINEAR/RADIAL/ANGLE/REFLECTED/DIAMOND), opacity and scale. ' +
+          'Does not rasterize the layer.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            stops: {
+              type: 'array',
+              description:
+                'Colour stops, e.g. [{"color":"#2BA89E","location":0},{"color":"#7FE3D8","location":100}]',
+              minItems: 2,
+              items: {
+                type: 'object',
+                properties: {
+                  color: { type: 'string', description: 'Hex colour, e.g. #2BA89E' },
+                  location: { type: 'number', minimum: 0, maximum: 100, description: 'Position %' },
+                },
+                required: ['color', 'location'],
+              },
+            },
+            angle: { type: 'number', description: 'Angle in degrees (default 90)', default: 90 },
+            type: {
+              type: 'string',
+              enum: ['LINEAR', 'RADIAL', 'ANGLE', 'REFLECTED', 'DIAMOND'],
+              description: 'Gradient style (default LINEAR)',
+              default: 'LINEAR',
+            },
+            opacity: { type: 'number', minimum: 0, maximum: 100, default: 100, description: 'Opacity %' },
+            scale: { type: 'number', minimum: 10, maximum: 150, default: 100, description: 'Scale %' },
+            reverse: { type: 'boolean', default: false, description: 'Reverse the gradient' },
+          },
+          required: ['stops'],
+        },
+      },
+      handler: async (args) => addGradientOverlay(connection, args),
+    },
+    {
+      tool: {
         name: 'photoshop_remove_layer_effects',
         description:
           'Remove ALL layer effects (styles) from the active layer, leaving the pixel content unchanged.',
@@ -183,6 +224,38 @@ function setLayerEffectScript(key: string, multiKey: string): string {
 }
 
 const STROKE_POSITIONS = ['OUTSIDE', 'INSIDE', 'CENTER'] as const;
+
+const GRADIENT_TYPES = ['LINEAR', 'RADIAL', 'ANGLE', 'REFLECTED', 'DIAMOND'] as const;
+const GRADIENT_TYPE_IDS: Record<(typeof GRADIENT_TYPES)[number], string> = {
+  LINEAR: 'Lnr ',
+  RADIAL: 'Rdl ',
+  ANGLE: 'Angl',
+  REFLECTED: 'Rflc',
+  DIAMOND: 'Dmnd',
+};
+
+/** Parses "#RRGGBB" / "RRGGBB" into 0-255 channels; throws on anything else. */
+export function parseHexColor(hex: string): { r: number; g: number; b: number } {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex).trim());
+  if (!m) throw new Error(`Invalid hex colour: ${hex} (expected #RRGGBB)`);
+  const n = parseInt(m[1], 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+/** Validates gradient stops and converts locations from 0-100 % to Photoshop's 0-4096. */
+export function normalizeGradientStops(
+  raw: unknown
+): Array<{ r: number; g: number; b: number; location: number }> {
+  if (!Array.isArray(raw) || raw.length < 2) throw new Error('stops must be an array of at least 2 stops');
+  return raw
+    .map((st) => {
+      const o = st as { color?: unknown; location?: unknown };
+      const loc = Number(o.location);
+      if (!Number.isFinite(loc) || loc < 0 || loc > 100) throw new Error(`Stop location must be 0-100, got ${o.location}`);
+      return { ...parseHexColor(String(o.color)), location: Math.round((loc / 100) * 4096) };
+    })
+    .sort((a, b) => a.location - b.location);
+}
 
 const amHelpers = `
 function cTID(s) { return app.charIDToTypeID(s); }
@@ -439,6 +512,98 @@ async function addStrokeEffect(
         position: ${jsxString(position)},
         color: { r: ${r}, g: ${g}, b: ${b} },
         opacity: ${opacity}
+      };
+    `);
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
+  }
+}
+
+async function addGradientOverlay(
+  connection: PhotoshopConnection,
+  args: Record<string, unknown>
+): Promise<ToolResult> {
+  try {
+    const stops = normalizeGradientStops(args.stops);
+    const angle = optionalNumber(args, 'angle', 90);
+    const opacity = optionalNumber(args, 'opacity', 100);
+    const scale = optionalNumber(args, 'scale', 100);
+    const reverse = args.reverse === true;
+    const typeName = jsxEnum(String(args.type ?? 'LINEAR').toUpperCase(), GRADIENT_TYPES, 'gradient type');
+    const stopJsx = stops
+      .map(
+        (st) => `cl.putObject(cTID('Clrt'), colorStop(${st.r}, ${st.g}, ${st.b}, ${st.location}));`
+      )
+      .join('\n      ');
+    const api = await new PhotoshopAPIFactory(connection).createAPI();
+    const result = await api.executeScript(`
+      ${amHelpers}
+      if (app.documents.length === 0) throw new Error('No active document');
+
+      function colorStop(r, g, b, loc) {
+        var c = new ActionDescriptor();
+        c.putDouble(cTID('Rd  '), r); c.putDouble(cTID('Grn '), g); c.putDouble(cTID('Bl  '), b);
+        var d = new ActionDescriptor();
+        d.putObject(cTID('Clr '), cTID('RGBC'), c);
+        d.putEnumerated(cTID('Type'), cTID('Clry'), cTID('UsrS'));
+        d.putInteger(cTID('Lctn'), loc);
+        d.putInteger(cTID('Mdpn'), 50);
+        return d;
+      }
+      function opacityStop(loc) {
+        var d = new ActionDescriptor();
+        d.putUnitDouble(cTID('Opct'), cTID('#Prc'), 100);
+        d.putInteger(cTID('Lctn'), loc);
+        d.putInteger(cTID('Mdpn'), 50);
+        return d;
+      }
+
+      var grad = new ActionDescriptor();
+      grad.putString(cTID('Nm  '), 'Custom');
+      grad.putEnumerated(cTID('GrdF'), cTID('GrdF'), cTID('CstS'));
+      grad.putDouble(cTID('Intr'), 4096);
+      var cl = new ActionList();
+      ${stopJsx}
+      grad.putList(cTID('Clrs'), cl);
+      var tl = new ActionList();
+      tl.putObject(cTID('TrnS'), opacityStop(0));
+      tl.putObject(cTID('TrnS'), opacityStop(4096));
+      grad.putList(cTID('Trns'), tl);
+
+      var effect = new ActionDescriptor();
+      effect.putBoolean(sTID('enabled'), true);
+      effect.putBoolean(sTID('present'), true);
+      effect.putBoolean(sTID('showInDialog'), true);
+      effect.putEnumerated(cTID('Md  '), cTID('BlnM'), cTID('Nrml'));
+      effect.putUnitDouble(cTID('Opct'), cTID('#Prc'), ${opacity});
+      effect.putObject(cTID('Grad'), cTID('Grdn'), grad);
+      effect.putUnitDouble(cTID('Angl'), cTID('#Ang'), ${angle});
+      effect.putEnumerated(cTID('Type'), cTID('GrdT'), cTID('${GRADIENT_TYPE_IDS[typeName]}'));
+      effect.putBoolean(cTID('Rvrs'), ${reverse});
+      effect.putBoolean(cTID('Algn'), true);
+      effect.putUnitDouble(cTID('Scl '), cTID('#Prc'), ${scale});
+      var ofs = new ActionDescriptor();
+      ofs.putUnitDouble(cTID('Hrzn'), cTID('#Prc'), 0);
+      ofs.putUnitDouble(cTID('Vrtc'), cTID('#Prc'), 0);
+      effect.putObject(cTID('Ofst'), cTID('Pnt '), ofs);
+      ${setLayerEffectScript('gradientFill', 'gradientFillMulti')}
+
+      return {
+        applied: true,
+        effect: 'gradientOverlay',
+        layerName: app.activeDocument.activeLayer.name,
+        type: ${jsxString(typeName)},
+        angle: ${angle},
+        stops: ${stops.length}
       };
     `);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
