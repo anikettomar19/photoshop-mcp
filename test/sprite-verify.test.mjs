@@ -12,7 +12,7 @@ import {
   rebuildSpriteIndex,
   searchSimilarSprites,
 } from '../dist/tools/sprite-tools.js';
-import { compareArt, computePhash } from '../dist/tools/sprite-hash.js';
+import { compareArt, computePhash, HASH_VERSION } from '../dist/tools/sprite-hash.js';
 
 // Draws by calling fn(x, y, w, h) -> [r, g, b, a] for every pixel.
 function draw(w, h, fn) {
@@ -208,6 +208,78 @@ test('an index hashed by older math is rebuilt before searching', async () => {
     const [top] = await searchSimilarSprites(q, root, 0.5, 3);
     assert.equal(top.verdict, 'same_art');
     const rebuilt = JSON.parse(readFileSync(indexPath, 'utf8'));
-    assert.ok(Object.values(rebuilt.sprites).every((e) => e.hv === 2));
+    assert.ok(Object.values(rebuilt.sprites).every((e) => e.hv === HASH_VERSION));
+  });
+});
+
+// White rounded rect: radius in px, optional 1px soft rim (as exports often have).
+const roundedRect = (w, h, radius, softRim = false) =>
+  draw(w, h, (x, y) => {
+    const px = x + 0.5;
+    const py = y + 0.5;
+    const cx = Math.min(Math.max(px, radius), w - radius);
+    const cy = Math.min(Math.max(py, radius), h - radius);
+    const inside = (px - cx) ** 2 + (py - cy) ** 2 <= radius * radius;
+    const rim = softRim && (x === 0 || y === 0 || x === w - 1 || y === h - 1);
+    return [255, 255, 255, inside ? (rim ? 128 : 255) : 0];
+  });
+
+test('a plain fill matches on colour and alpha, not pHash noise', async () => {
+  await withProject(async (root) => {
+    await save(join(root, 'Assets/Sprites/flat_rect.png'), roundedRect(110, 110, 0, true));
+    await save(join(root, 'Assets/Sprites/badge.png'), badge(4));
+    await rebuild(root);
+    const q = join(root, 'q.png');
+    await save(q, roundedRect(12, 12, 0));
+    const [top] = await searchSimilarSprites(q, root, 0.5, 3);
+    assert.equal(top.path, 'Assets/Sprites/flat_rect.png');
+    assert.equal(top.breakdown.phash_ignored, 'plain fill');
+    assert.ok(top.score >= 0.95, `score ${top.score}`);
+  });
+});
+
+test('a 9-slice is judged as drawn at the query size, not uniformly scaled', async () => {
+  await withProject(async (root) => {
+    // 64px source with 16px corners, collapsed to minimum size as TAs export
+    // 9-slices; the query is the same panel drawn larger and wide.
+    const sliced = join(root, 'Assets/Sprites/panel_9slice.png');
+    await save(sliced, roundedRect(64, 64, 14));
+    writeFileSync(
+      sliced + '.meta',
+      'TextureImporter:\n  spriteBorder: {x: 16, y: 16, z: 16, w: 16}\n'
+    );
+    await save(join(root, 'Assets/Sprites/pill.png'), roundedRect(64, 64, 32));
+    await rebuild(root);
+
+    const q = join(root, 'q.png');
+    await save(q, roundedRect(240, 100, 14));
+    const results = await searchSimilarSprites(q, root, 0.3, 3);
+    const panel = results.find((r) => r.path === 'Assets/Sprites/panel_9slice.png');
+    assert.ok(panel, JSON.stringify(results));
+    assert.equal(panel.verdict, 'same_art');
+    assert.equal(panel.verify.mode, '9slice');
+    assert.equal(results[0].path, 'Assets/Sprites/panel_9slice.png');
+  });
+});
+
+test('a same-shape 9-slice drawn bigger keeps its corner size and is same_art', async () => {
+  await withProject(async (root) => {
+    // Uniformly scaling the 300px query down shrinks its 10px corners to ~3px,
+    // so only the 9-slice reading sees that the source draws it exactly.
+    const sliced = join(root, 'Assets/Sprites/card_9slice.png');
+    await save(sliced, roundedRect(100, 100, 10));
+    writeFileSync(
+      sliced + '.meta',
+      'TextureImporter:\n  spriteBorder: {x: 30, y: 30, z: 30, w: 30}\n'
+    );
+    await rebuild(root);
+
+    const q = join(root, 'q.png');
+    await save(q, roundedRect(300, 300, 10));
+    const [top] = await searchSimilarSprites(q, root, 0.3, 3);
+    assert.equal(top.path, 'Assets/Sprites/card_9slice.png');
+    assert.equal(top.verify.mode, '9slice');
+    assert.equal(top.verdict, 'same_art');
+    assert.equal(top.verify.corner_scale, 1);
   });
 });

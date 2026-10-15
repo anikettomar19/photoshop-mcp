@@ -23,13 +23,20 @@ type JimpImage = any;
 // Bump when the perceptual hashes change shape; index entries from another
 // version are re-hashed, since mixing versions makes every score meaningless.
 // v2: hashes are taken on the trimmed image, and pHash composites over grey.
-export const HASH_VERSION = 2;
+// v3: entries carry phashStrength.
+export const HASH_VERSION = 3;
+
+// Below this luminance std-dev (0–255) an image has no structure for pHash to
+// read: its DCT terms are ~0, so the bits are noise. Plain fills measure ~0,
+// real sprites 20+.
+export const PHASH_MIN_STRENGTH = 4;
 
 export interface SpriteHashes {
   width: number;
   height: number;
   aspectRatio: number;
   phash: number[];
+  phashStrength: number;
   hsvHist: number[];
   alphaHash: number[];
   contentHash: string;
@@ -105,6 +112,28 @@ export function dct1d(data: number[]): number[] {
  * Perceptual hash via 2-D DCT. Returns (hashSize² - 1) bits with DC removed.
  * Clones the input so the shared decoded image is never mutated.
  */
+/**
+ * Luminance std-dev of the exact sample computePhash reads. Low means the pHash
+ * bits carry no signal for this image (see PHASH_MIN_STRENGTH).
+ */
+export function computePhashStrength(img: JimpImage, hashSize = 8): number {
+  const sample = hashSize * 4;
+  const work = img.clone();
+  flattenOverGrey(work);
+  work.resize({ w: sample, h: sample });
+  work.greyscale();
+  const { data } = work.bitmap;
+  let sum = 0,
+    sumSq = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    sum += data[i];
+    sumSq += data[i] * data[i];
+  }
+  const n = data.length / 4;
+  const mean = sum / n;
+  return Math.round(Math.sqrt(Math.max(0, sumSq / n - mean * mean)) * 100) / 100;
+}
+
 export function computePhash(img: JimpImage, hashSize = 8): number[] {
   const sample = hashSize * 4; // 32×32 for hashSize=8
   const work = img.clone();
@@ -262,6 +291,7 @@ export function computeSpriteHashes(img: JimpImage): SpriteHashes {
     height,
     aspectRatio: art.bitmap.width / (art.bitmap.height || 1),
     phash: computePhash(art),
+    phashStrength: computePhashStrength(art),
     hsvHist: computeHsvHistogram(art),
     alphaHash: computeAlphaHash(art),
     contentHash: computeContentHash(img),
@@ -338,6 +368,14 @@ function boxShrink(img: JimpImage, w: number, h: number): Float64Array {
       out[o + 3] = a / n;
     }
   }
+  return out;
+}
+
+/** boxShrink as a Jimp image. */
+export function shrinkImage(img: JimpImage, w: number, h: number): JimpImage {
+  const px = boxShrink(img, w, h);
+  const out = new Jimp({ width: w, height: h, color: 0x00000000 });
+  for (let i = 0; i < px.length; i++) out.bitmap.data[i] = Math.round(px[i]);
   return out;
 }
 

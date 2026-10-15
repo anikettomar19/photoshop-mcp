@@ -14,6 +14,10 @@ import {
   trimTransparent,
   compareArt,
   HASH_VERSION,
+  computePhashStrength,
+  PHASH_MIN_STRENGTH,
+  shrinkImage,
+  type ArtComparison,
 } from './sprite-hash.js';
 import { requireString } from '../utils/args.js';
 
@@ -27,6 +31,7 @@ export interface SpriteEntry {
   height: number;
   aspectRatio: number;
   phash: number[];
+  phashStrength?: number; // luminance std-dev of the pHash sample; ~0 = plain fill
   hsvHist: number[];
   alphaHash: number[];
   spriteBorder?: [number, number, number, number]; // [x,y,z,w] from .meta (9-slice only)
@@ -133,6 +138,48 @@ export async function nineSliceStretch(
   return result;
 }
 
+// Corner sizes tried when drawing a 9-slice at the query's size, as fractions of
+// the largest that fits: the pixelsPerUnitMultiplier a TA would set is unknown.
+const NINE_SLICE_CORNER_SCALES = [1, 0.75, 0.5, 0.25];
+
+export function betterComparison(a: ArtComparison, b: ArtComparison): boolean {
+  const rank = VERDICT_RANK[a.verdict] - VERDICT_RANK[b.verdict];
+  return rank < 0 || (rank === 0 && (a.mad ?? Infinity) < (b.mad ?? Infinity));
+}
+
+/**
+ * Judge a 9-slice candidate as Unity draws it at the query's size: corners
+ * shrunk (when they don't fit, or by a guessed PPU multiplier), centre stretched.
+ * Uniformly scaling a 110px 9-slice to compare with a 12px one is meaningless.
+ */
+export async function compareAsNineSlice(
+  query: any,
+  cand: any,
+  border: [number, number, number, number]
+): Promise<{ cmp: ArtComparison; cornerScale: number }> {
+  const [bl, bb, br, bt] = border;
+  const tw = query.bitmap.width;
+  const th = query.bitmap.height;
+  const fit = Math.min(1, (tw - 1) / Math.max(1, bl + br), (th - 1) / Math.max(1, bb + bt));
+  let best: { cmp: ArtComparison; cornerScale: number } | undefined;
+  const smallestBorder = Math.min(...border.filter((v) => v > 0));
+  for (const s of NINE_SLICE_CORNER_SCALES) {
+    const k = fit * s;
+    // Corners shrunk below ~1.5px vanish, and any solid 9-slice then reads as a
+    // plain rect — a match that proves nothing. The fit scale is always tried.
+    if (s < 1 && smallestBorder * k < 1.5) continue;
+    const w = Math.max(1, Math.round(cand.bitmap.width * k));
+    const h = Math.max(1, Math.round(cand.bitmap.height * k));
+    const scaled = k < 1 ? shrinkImage(cand, w, h) : cand;
+    const kb = border.map((v) => v * k) as [number, number, number, number];
+    const cmp = compareArt(query, await nineSliceStretch(scaled, kb, tw, th));
+    if (!best || betterComparison(cmp, best.cmp)) {
+      best = { cmp, cornerScale: Math.round(k * 1000) / 1000 };
+    }
+  }
+  return best!;
+}
+
 // ---------------------------------------------------------------------------
 // Similarity metrics
 // ---------------------------------------------------------------------------
@@ -156,15 +203,21 @@ export function chiSquaredSim(a: number[], b: number[]): number {
  * Weighted combination of all three metrics with aspect ratio penalty.
  * pHash 40% (structure), HSV 35% (colour), alpha 25% (transparency pattern).
  * Penalty starts when aspect ratio differs by more than 15%.
+ * `structureless`: either image is a plain fill, so pHash is noise — it is
+ * dropped and colour + alpha are reweighted to sum to 1.
  */
 export function combinedScore(
   phashS: number,
   hsvS: number,
   alphaS: number,
-  aspectDiff: number
+  aspectDiff: number,
+  structureless = false
 ): number {
   const penalty = Math.max(0, 1 - Math.max(0, aspectDiff - 0.15) * 5);
-  return (phashS * 0.4 + hsvS * 0.35 + alphaS * 0.25) * penalty;
+  const blend = structureless
+    ? (hsvS * 0.35 + alphaS * 0.25) / 0.6
+    : phashS * 0.4 + hsvS * 0.35 + alphaS * 0.25;
+  return blend * penalty;
 }
 
 // ---------------------------------------------------------------------------
@@ -403,6 +456,7 @@ export async function searchSimilarSprites(
   const qRaw = await Jimp.read(queryPath);
   const qImg = trimTransparent(qRaw);
   const qPhash = computePhash(qImg);
+  const qFlat = computePhashStrength(qImg) < PHASH_MIN_STRENGTH;
   const qHsv = computeHsvHistogram(qImg);
   const qAlpha = computeAlphaHash(qImg);
   const qAspect = qImg.bitmap.width / (qImg.bitmap.height || 1);
@@ -441,7 +495,8 @@ export async function searchSimilarSprites(
     const nativePhash = hammingSim(qPhash, entry.phash);
     const nativeHsv = chiSquaredSim(qHsv, entry.hsvHist);
     const nativeAlpha = hammingSim(qAlpha, entry.alphaHash);
-    const sc = combinedScore(nativePhash, nativeHsv, nativeAlpha, aspectDiff);
+    const flat = qFlat || (entry.phashStrength ?? Infinity) < PHASH_MIN_STRENGTH;
+    const sc = combinedScore(nativePhash, nativeHsv, nativeAlpha, aspectDiff, flat);
 
     if (sc >= threshold) {
       results.push({
@@ -451,6 +506,7 @@ export async function searchSimilarSprites(
           phash: Math.round(nativePhash * 1000) / 1000,
           hsv: Math.round(nativeHsv * 1000) / 1000,
           alpha: Math.round(nativeAlpha * 1000) / 1000,
+          ...(flat && { phash_ignored: 'plain fill' }),
         },
         dimensions: `${entry.width}×${entry.height}`,
         _spriteBorder: entry.spriteBorder,
@@ -497,7 +553,8 @@ export async function searchSimilarSprites(
         );
       }
 
-      const sc = combinedScore(sPhash, sHsv, sAlpha, 0);
+      const sFlat = qFlat || computePhashStrength(sImg) < PHASH_MIN_STRENGTH;
+      const sc = combinedScore(sPhash, sHsv, sAlpha, 0, sFlat);
       if (sc >= threshold) {
         results.push({
           path: rel,
@@ -506,6 +563,7 @@ export async function searchSimilarSprites(
             phash: Math.round(sPhash * 1000) / 1000,
             hsv: Math.round(sHsv * 1000) / 1000,
             alpha: Math.round(sAlpha * 1000) / 1000,
+            ...(sFlat && { phash_ignored: 'plain fill' }),
           },
           dimensions: `${entry.width}×${entry.height}`,
           match_type: '9slice_stretched',
@@ -535,18 +593,24 @@ export async function searchSimilarSprites(
     for (const r of ranked) {
       try {
         const cand = await Jimp.read(join(projectRoot, r.path as string));
-        const target =
-          r.match_type === '9slice_stretched'
-            ? await nineSliceStretch(
-                cand as any,
-                r._spriteBorder as [number, number, number, number],
-                qWidth,
-                qHeight
-              )
-            : cand;
-        const cmp = compareArt(r.match_type === '9slice_stretched' ? qImg : qRaw, target);
-        r.verdict = cmp.verdict;
-        r.verify = { mad: cmp.mad, p95: cmp.p95 };
+        const border = r._spriteBorder as [number, number, number, number] | undefined;
+        let best: { cmp: ArtComparison; mode: string; corner_scale?: number } | undefined;
+        if (r.match_type !== '9slice_stretched') {
+          best = { cmp: compareArt(qRaw, cand), mode: 'scaled' };
+        }
+        // A 9-slice is never shown uniformly scaled, so also judge it the way
+        // Unity draws it at the query's size; keep whichever reading is closer.
+        if (border && best?.cmp.verdict !== 'exact') {
+          const nine = await compareAsNineSlice(qImg, cand, border);
+          if (!best || betterComparison(nine.cmp, best.cmp)) {
+            best = { cmp: nine.cmp, mode: '9slice', corner_scale: nine.cornerScale };
+          }
+        }
+        r.verdict = best!.cmp.verdict;
+        r.verify = { mad: best!.cmp.mad, p95: best!.cmp.p95, mode: best!.mode };
+        if (best!.corner_scale !== undefined) {
+          (r.verify as Record<string, unknown>).corner_scale = best!.corner_scale;
+        }
       } catch (err) {
         r.verdict = 'review';
         r.verify_error = err instanceof Error ? err.message : String(err);
