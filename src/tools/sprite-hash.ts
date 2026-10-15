@@ -7,8 +7,8 @@ import { Jimp } from 'jimp';
 //
 // These operate on an already-decoded Jimp image so a sprite is decoded ONCE
 // and all three hashes are derived from that single decode (the rebuild loop
-// and find_similar previously decoded the same file 3–4×). The math is
-// byte-identical to the original path so existing indexes stay valid.
+// and find_similar previously decoded the same file 3–4×). Indexes record
+// HASH_VERSION so entries hashed by older math get rebuilt, not compared.
 //
 // This module has no MCP/SDK dependencies so it can be imported by a
 // worker_threads worker for parallel cold-index builds.
@@ -20,6 +20,11 @@ import { Jimp } from 'jimp';
 // instance — use a loose type for the param to sidestep the broken typings.
 type JimpImage = any;
 
+// Bump when the perceptual hashes change shape; index entries from another
+// version are re-hashed, since mixing versions makes every score meaningless.
+// v2: hashes are taken on the trimmed image, and pHash composites over grey.
+export const HASH_VERSION = 2;
+
 export interface SpriteHashes {
   width: number;
   height: number;
@@ -28,6 +33,45 @@ export interface SpriteHashes {
   hsvHist: number[];
   alphaHash: number[];
   contentHash: string;
+  hv: number;
+}
+
+/**
+ * Crop away fully transparent borders. The same art exported with padding must
+ * hash like the unpadded copy. A fully transparent image is returned as is.
+ */
+export function trimTransparent(img: JimpImage): JimpImage {
+  const { data, width, height } = img.bitmap;
+  let x0 = width,
+    y0 = height,
+    x1 = -1,
+    y1 = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (data[(y * width + x) * 4 + 3] === 0) continue;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+  if (x1 < 0 || (x0 === 0 && y0 === 0 && x1 === width - 1 && y1 === height - 1)) return img;
+  return img.clone().crop({ x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 });
+}
+
+/**
+ * Composite RGB over mid-grey by alpha, in place. Without this, greyscale reads
+ * the RGB of transparent pixels, so white-on-transparent shapes all hash blank.
+ */
+export function flattenOverGrey(img: JimpImage): void {
+  const { data } = img.bitmap;
+  for (let i = 0; i < data.length; i += 4) {
+    const a = data[i + 3] / 255;
+    data[i] = Math.round(data[i] * a + 128 * (1 - a));
+    data[i + 1] = Math.round(data[i + 1] * a + 128 * (1 - a));
+    data[i + 2] = Math.round(data[i + 2] * a + 128 * (1 - a));
+    data[i + 3] = 255;
+  }
 }
 
 /**
@@ -64,6 +108,7 @@ export function dct1d(data: number[]): number[] {
 export function computePhash(img: JimpImage, hashSize = 8): number[] {
   const sample = hashSize * 4; // 32×32 for hashSize=8
   const work = img.clone();
+  flattenOverGrey(work);
   work.resize({ w: sample, h: sample });
   work.greyscale();
   const { data, width } = work.bitmap;
@@ -206,20 +251,146 @@ export function computeNineSliceGeom(img: JimpImage): NineSliceGeom {
 }
 
 /**
- * Decode a file once and compute all three hashes + dimensions.
+ * All hashes for one decoded image. Width/height and contentHash describe the
+ * file as stored; the perceptual hashes and aspect ratio use the trimmed art.
  */
-export async function hashImageFile(absPath: string): Promise<SpriteHashes> {
-  const img = await Jimp.read(absPath);
+export function computeSpriteHashes(img: JimpImage): SpriteHashes {
   const { width, height } = img.bitmap;
+  const art = trimTransparent(img);
   return {
     width,
     height,
-    aspectRatio: width / (height || 1),
-    phash: computePhash(img),
-    hsvHist: computeHsvHistogram(img),
-    alphaHash: computeAlphaHash(img),
+    aspectRatio: art.bitmap.width / (art.bitmap.height || 1),
+    phash: computePhash(art),
+    hsvHist: computeHsvHistogram(art),
+    alphaHash: computeAlphaHash(art),
     contentHash: computeContentHash(img),
+    hv: HASH_VERSION,
   };
+}
+
+/**
+ * Decode a file once and compute all hashes + dimensions.
+ */
+export async function hashImageFile(absPath: string): Promise<SpriteHashes> {
+  return computeSpriteHashes(await Jimp.read(absPath));
+}
+
+// ---------------------------------------------------------------------------
+// Pixel verification — the hashes only shortlist. Similar colour + silhouette
+// scores high for different art (two coins at different angles), so a match is
+// labelled by comparing the trimmed pixels at a common size.
+// ---------------------------------------------------------------------------
+
+// 'review' is the honest middle: resize artefacts on tiny sprites and real shape
+// changes on soft glows land at the same distances, so no threshold splits them.
+export type Verdict = 'exact' | 'same_art' | 'review' | 'different';
+
+export interface ArtComparison {
+  verdict: Verdict;
+  mad: number | null; // mean abs difference per channel, 0–255
+  p95: number | null; // 95th-percentile per-pixel max channel difference
+}
+
+// Trimmed aspect ratios further apart than this are different shapes, not a resize.
+const VERIFY_MAX_ASPECT_DIFF = 0.06;
+// Compared at this longest side, so resolution differences mostly wash out.
+const VERIFY_SIDE = 32;
+// Calibrated on hand-labelled pairs (same art at 2–4× resolution vs different
+// art with the same colours and silhouette); see test/sprite-verify.test.mjs.
+const SAME_ART_MAX_MAD = 2.5;
+const SAME_ART_MAX_P95 = 25;
+const REVIEW_MAX_MAD = 8;
+
+/**
+ * Area-average shrink to w×h (alpha-weighted). Resampling filters skip source
+ * pixels when shrinking a lot, which makes two copies of the same art differ.
+ */
+function boxShrink(img: JimpImage, w: number, h: number): Float64Array {
+  const { data, width: W, height: H } = img.bitmap;
+  const out = new Float64Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    const sy0 = Math.floor((y * H) / h);
+    const sy1 = Math.max(sy0 + 1, Math.floor(((y + 1) * H) / h));
+    for (let x = 0; x < w; x++) {
+      const sx0 = Math.floor((x * W) / w);
+      const sx1 = Math.max(sx0 + 1, Math.floor(((x + 1) * W) / w));
+      let r = 0,
+        g = 0,
+        b = 0,
+        a = 0,
+        n = 0;
+      for (let sy = sy0; sy < sy1; sy++) {
+        for (let sx = sx0; sx < sx1; sx++) {
+          const i = (sy * W + sx) * 4;
+          const al = data[i + 3];
+          r += data[i] * al;
+          g += data[i + 1] * al;
+          b += data[i + 2] * al;
+          a += al;
+          n++;
+        }
+      }
+      const o = (y * w + x) * 4;
+      out[o] = a ? r / a : 0;
+      out[o + 1] = a ? g / a : 0;
+      out[o + 2] = a ? b / a : 0;
+      out[o + 3] = a / n;
+    }
+  }
+  return out;
+}
+
+export function compareArt(a: JimpImage, b: JimpImage): ArtComparison {
+  if (
+    a.bitmap.width === b.bitmap.width &&
+    a.bitmap.height === b.bitmap.height &&
+    computeContentHash(a) === computeContentHash(b)
+  ) {
+    return { verdict: 'exact', mad: 0, p95: 0 };
+  }
+  const A = trimTransparent(a);
+  const B = trimTransparent(b);
+  const arA = A.bitmap.width / (A.bitmap.height || 1);
+  const arB = B.bitmap.width / (B.bitmap.height || 1);
+  if (Math.abs(arA - arB) / Math.max(arA, arB) > VERIFY_MAX_ASPECT_DIFF) {
+    return { verdict: 'different', mad: null, p95: null };
+  }
+
+  const cw = Math.min(A.bitmap.width, B.bitmap.width);
+  const ch = Math.min(A.bitmap.height, B.bitmap.height);
+  const s = Math.min(1, VERIFY_SIDE / Math.max(cw, ch));
+  const w = Math.max(1, Math.round(cw * s));
+  const h = Math.max(1, Math.round(ch * s));
+  const pa = boxShrink(A, w, h);
+  const pb = boxShrink(B, w, h);
+  const perPixel = new Float64Array(w * h);
+  let sum = 0;
+  for (let p = 0; p < w * h; p++) {
+    const o = p * 4;
+    // Compare as composited over grey so the RGB of transparent pixels is ignored.
+    const fa = pa[o + 3] / 255;
+    const fb = pb[o + 3] / 255;
+    let worst = 0;
+    for (let c = 0; c < 3; c++) {
+      const d = Math.abs(pa[o + c] * fa + 128 * (1 - fa) - (pb[o + c] * fb + 128 * (1 - fb)));
+      sum += d;
+      if (d > worst) worst = d;
+    }
+    const da = Math.abs(pa[o + 3] - pb[o + 3]);
+    sum += da;
+    perPixel[p] = Math.max(worst, da);
+  }
+  const mad = sum / (w * h * 4);
+  const sorted = Array.from(perPixel).sort((x, y) => x - y);
+  const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))];
+  const verdict: Verdict =
+    mad < SAME_ART_MAX_MAD && p95 < SAME_ART_MAX_P95
+      ? 'same_art'
+      : mad < REVIEW_MAX_MAD
+        ? 'review'
+        : 'different';
+  return { verdict, mad: Math.round(mad * 100) / 100, p95: Math.round(p95) };
 }
 
 /**

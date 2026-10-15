@@ -11,6 +11,9 @@ import {
   computeAlphaHash,
   computeNineSliceGeom,
   readSpriteBorder,
+  trimTransparent,
+  compareArt,
+  HASH_VERSION,
 } from './sprite-hash.js';
 import { requireString } from '../utils/args.js';
 
@@ -31,6 +34,7 @@ export interface SpriteEntry {
   dominant_color?: number[] | null;
   contentHash?: string; // SHA-1 of raw RGBA bytes — exact-identity key for dedup
   duplicatePaths?: string[]; // other folders holding byte/visually-identical art (dedup)
+  hv?: number; // HASH_VERSION the perceptual hashes were computed with
 }
 
 interface IndexFile {
@@ -207,6 +211,23 @@ export function cacheDirFor(projectRoot: string): string {
   return join(homedir(), '.cache', 'photoshop-mcp', key);
 }
 
+/**
+ * Project-relative sprite roots, first one primary (catalog lives there and it
+ * wins dedup canonicals). Order: explicit arg, SPRITE_ROOTS env (comma-separated),
+ * else whichever of Assets/Sprites (Sorry) or Assets/Sprite (Ludo) exists.
+ */
+export function resolveSpriteRoots(projectRoot: string, explicit?: unknown): string[] {
+  const raw = explicit ?? process.env.SPRITE_ROOTS;
+  const list = (Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(',') : [])
+    .map((s) => String(s).trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+  if (list.length) return list;
+  for (const candidate of ['Assets/Sprites', 'Assets/Sprite']) {
+    if (existsSync(join(projectRoot, candidate))) return [candidate];
+  }
+  return ['Assets/Sprites'];
+}
+
 export function getProjectPaths(args: Record<string, unknown>) {
   const projectRoot = (args.project_root as string | undefined) || process.env.UNITY_PROJECT_ROOT;
   if (!projectRoot) {
@@ -215,10 +236,12 @@ export function getProjectPaths(args: Record<string, unknown>) {
     );
   }
   const cacheDir = cacheDirFor(projectRoot);
+  const spriteRoots = resolveSpriteRoots(projectRoot, args.sprite_roots);
   return {
     projectRoot,
-    spritesRoot: join(projectRoot, 'Assets', 'Sprites'),
-    catalogPath: join(projectRoot, 'Assets', 'Sprites', '.sprite_catalog.json'),
+    spriteRoots,
+    spritesRoot: join(projectRoot, spriteRoots[0]),
+    catalogPath: join(projectRoot, spriteRoots[0], '.sprite_catalog.json'),
     indexPath: join(cacheDir, 'sprite_index.json'),
     nineSliceIndexPath: join(cacheDir, 'nine_slice_index.json'),
   };
@@ -342,21 +365,43 @@ export function saveCatalog(catalogPath: string, sprites: Record<string, Catalog
  * find-similar-cli.js (subprocess access without MCP overhead).
  * Throws when the index is empty.
  */
+const VERDICT_RANK: Record<string, number> = { exact: 0, same_art: 1, review: 2, different: 3 };
+
+export interface SearchOptions {
+  spriteRoots?: unknown; // see resolveSpriteRoots
+  verify?: boolean; // pixel-verify the shortlist and rank by verdict (default true)
+}
+
 export async function searchSimilarSprites(
   queryPath: string,
   projectRoot: string,
   threshold: number = 0.5,
-  topN: number = 5
+  topN: number = 5,
+  options: SearchOptions = {}
 ): Promise<Array<Record<string, unknown>>> {
-  const indexPath = join(cacheDirFor(projectRoot), 'sprite_index.json');
-  const catalogPath = join(projectRoot, 'Assets', 'Sprites', '.sprite_catalog.json');
-  const index = loadIndex(indexPath);
+  const { indexPath, catalogPath } = getProjectPaths({
+    project_root: projectRoot,
+    sprite_roots: options.spriteRoots,
+  });
+  let index = loadIndex(indexPath);
 
   if (Object.keys(index).length === 0) {
     throw new Error('Index is empty — call rebuild_sprite_index first.');
   }
+  // Query hashes use the current math; comparing them to older entries is noise.
+  if (Object.values(index).some((e) => e.hv !== HASH_VERSION)) {
+    console.warn(`sprite index predates hash v${HASH_VERSION}; rebuilding before search`);
+    const res = await rebuildSpriteIndex({
+      project_root: projectRoot,
+      sprite_roots: options.spriteRoots,
+    });
+    const first = res.content[0];
+    if (res.isError) throw new Error(first.type === 'text' ? first.text : 'index rebuild failed');
+    index = loadIndex(indexPath);
+  }
 
-  const qImg = await Jimp.read(queryPath);
+  const qRaw = await Jimp.read(queryPath);
+  const qImg = trimTransparent(qRaw);
   const qPhash = computePhash(qImg);
   const qHsv = computeHsvHistogram(qImg);
   const qAlpha = computeAlphaHash(qImg);
@@ -439,7 +484,7 @@ export async function searchSimilarSprites(
       const tmpPath = `/tmp/_9slice_stretch_${process.pid}_${++tmpCounter}.png`;
       const buf = await stretched.getBuffer('image/png');
       writeFileSync(tmpPath, buf);
-      const sImg = await Jimp.read(tmpPath);
+      const sImg = trimTransparent(await Jimp.read(tmpPath));
       const sPhash = hammingSim(qPhash, computePhash(sImg));
       const sHsv = chiSquaredSim(qHsv, computeHsvHistogram(sImg));
       const sAlpha = hammingSim(qAlpha, computeAlphaHash(sImg));
@@ -481,9 +526,39 @@ export async function searchSimilarSprites(
     const prev = best.get(p);
     if (!prev || (r.score as number) > (prev.score as number)) best.set(p, r);
   }
-  const finalResults = [...best.values()]
-    .sort((a, b) => (b.score as number) - (a.score as number))
-    .slice(0, topN);
+  let ranked = [...best.values()].sort((a, b) => (b.score as number) - (a.score as number));
+
+  // Hash scores only shortlist: different art with the same colours and
+  // silhouette scores ~0.95. Verify a wider shortlist, then rank by verdict.
+  if (options.verify !== false) {
+    ranked = ranked.slice(0, topN * 3);
+    for (const r of ranked) {
+      try {
+        const cand = await Jimp.read(join(projectRoot, r.path as string));
+        const target =
+          r.match_type === '9slice_stretched'
+            ? await nineSliceStretch(
+                cand as any,
+                r._spriteBorder as [number, number, number, number],
+                qWidth,
+                qHeight
+              )
+            : cand;
+        const cmp = compareArt(r.match_type === '9slice_stretched' ? qImg : qRaw, target);
+        r.verdict = cmp.verdict;
+        r.verify = { mad: cmp.mad, p95: cmp.p95 };
+      } catch (err) {
+        r.verdict = 'review';
+        r.verify_error = err instanceof Error ? err.message : String(err);
+      }
+    }
+    ranked.sort(
+      (a, b) =>
+        VERDICT_RANK[a.verdict as string] - VERDICT_RANK[b.verdict as string] ||
+        (b.score as number) - (a.score as number)
+    );
+  }
+  const finalResults = ranked.slice(0, topN);
   for (const r of finalResults) {
     const border = r._spriteBorder;
     delete r._spriteBorder;
@@ -502,7 +577,10 @@ async function findSimilarSprites(args: Record<string, unknown>): Promise<ToolRe
 
   try {
     const { projectRoot } = getProjectPaths(args);
-    const results = await searchSimilarSprites(queryPath, projectRoot, threshold, topN);
+    const results = await searchSimilarSprites(queryPath, projectRoot, threshold, topN, {
+      spriteRoots: args.sprite_roots,
+      verify: args.verify as boolean | undefined,
+    });
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(results, null, 2) }],
     };
@@ -589,11 +667,15 @@ interface DupGroup {
  * lets find_similar tally a repeated image ONCE instead of returning the same
  * art from several folders.
  */
-function dedupeByContent(sprites: Record<string, SpriteEntry>): {
+function dedupeByContent(
+  sprites: Record<string, SpriteEntry>,
+  preferredRoots: string[] = ['Assets/Sprites']
+): {
   deduped: Record<string, SpriteEntry>;
   duplicates: Record<string, SpriteEntry>;
   duplicateGroups: DupGroup[];
 } {
+  const inPreferred = (p: string) => (preferredRoots.some((r) => p.startsWith(r + '/')) ? 0 : 1);
   const byKey = new Map<string, string[]>();
   for (const [rel, e] of Object.entries(sprites)) {
     // Exact pixel identity only. An entry without a contentHash (e.g. carried
@@ -608,9 +690,7 @@ function dedupeByContent(sprites: Record<string, SpriteEntry>): {
   const duplicateGroups: DupGroup[] = [];
   for (const paths of byKey.values()) {
     const canonical = paths.slice().sort((a, b) => {
-      const aS = a.startsWith('Assets/Sprites') ? 0 : 1;
-      const bS = b.startsWith('Assets/Sprites') ? 0 : 1;
-      return aS - bS || a.length - b.length || a.localeCompare(b);
+      return inPreferred(a) - inPreferred(b) || a.length - b.length || a.localeCompare(b);
     })[0];
     const entry: SpriteEntry = { ...sprites[canonical] };
     delete entry.duplicatePaths; // clear any stale field from a prior build
@@ -631,13 +711,15 @@ function dedupeByContent(sprites: Record<string, SpriteEntry>): {
 
 export async function rebuildSpriteIndex(args: Record<string, unknown>): Promise<ToolResult> {
   try {
-    const { projectRoot, spritesRoot, indexPath, nineSliceIndexPath } = getProjectPaths(args);
+    const { projectRoot, spriteRoots, indexPath, nineSliceIndexPath } = getProjectPaths(args);
     // Previously folded-away copies are reusable too, or every rebuild would
     // re-decode them as if they were new.
     const existing = { ...loadIndexDuplicates(indexPath), ...loadIndex(indexPath) };
-    // Cold build scans Assets/Sprites + the extra roots; dedup (below) keeps the
+    // Cold build scans the sprite roots + the extra roots; dedup (below) keeps the
     // searchable set one-entry-per-image, so search isn't widened with copies.
-    const indexRoots = [spritesRoot, ...INDEX_EXTRA_ROOTS.map((r) => join(projectRoot, r))];
+    const indexRoots = [...new Set([...spriteRoots, ...INDEX_EXTRA_ROOTS])].map((r) =>
+      join(projectRoot, r)
+    );
     const allPaths = indexRoots.flatMap((r) => (existsSync(r) ? walkDir(r) : []));
 
     let indexed = 0,
@@ -658,9 +740,14 @@ export async function rebuildSpriteIndex(args: Record<string, unknown>): Promise
       }
 
       const prev = existing[rel];
-      // An entry without contentHash predates dedup: rehash it once, or it
-      // could never be matched against its copies.
-      if (prev && prev.contentHash && Math.abs(prev.mtime - mtime) < 500) {
+      // An entry without contentHash predates dedup, and one from another hash
+      // version can't be compared with today's queries: rehash both once.
+      if (
+        prev &&
+        prev.contentHash &&
+        prev.hv === HASH_VERSION &&
+        Math.abs(prev.mtime - mtime) < 500
+      ) {
         sprites[rel] = prev; // copy unchanged entry
         skipped++;
         continue;
@@ -680,7 +767,7 @@ export async function rebuildSpriteIndex(args: Record<string, unknown>): Promise
     // Content-dedup: identical art across folders collapses to ONE canonical
     // entry (tallied once), with the other locations recorded on it. Search then
     // returns one hit per unique image instead of the same art from N folders.
-    const { deduped, duplicates, duplicateGroups } = dedupeByContent(sprites);
+    const { deduped, duplicates, duplicateGroups } = dedupeByContent(sprites, spriteRoots);
     saveIndex(indexPath, deduped, duplicates);
     // Build the nine-slice index from EVERY file, not the deduped set: the
     // border lives in each file's .meta, so byte-identical copies can differ
@@ -697,6 +784,8 @@ export async function rebuildSpriteIndex(args: Record<string, unknown>): Promise
           type: 'text' as const,
           text: JSON.stringify(
             {
+              sprite_roots: spriteRoots,
+              hash_version: HASH_VERSION,
               total_sprites: allPaths.length,
               unique_sprites: Object.keys(deduped).length,
               newly_indexed: indexed,
@@ -833,18 +922,30 @@ async function catalogList(args: Record<string, unknown>): Promise<ToolResult> {
 // Factory — no PhotoshopConnection needed (pure file I/O)
 // ---------------------------------------------------------------------------
 
+const SPRITE_ROOTS_SCHEMA = {
+  type: 'array',
+  items: { type: 'string' },
+  description:
+    'Project-relative sprite folders, first is primary (default: SPRITE_ROOTS env, ' +
+    'else whichever of Assets/Sprites or Assets/Sprite exists)',
+};
+
 export function createSpriteTools(): ToolDefinition[] {
   return [
     {
       tool: {
         name: 'find_similar_sprites',
         description:
-          'Find sprites in Assets/Sprites/ that visually resemble a given image.\n\n' +
-          'Call this AFTER catalog_search returns nothing. Reliability:\n' +
-          '  ~85% for character art and distinct icons\n' +
-          '  ~55% for UI panels/backgrounds (similar-looking assets may score close)\n\n' +
-          'Read the breakdown in each result: low hsv = colours differ, ' +
-          'low alpha = transparency pattern differs. Both low = false positive.\n\n' +
+          'Find sprites in the project sprite roots (Assets/Sprites or Assets/Sprite) ' +
+          'that visually resemble a given image.\n\n' +
+          'Call this AFTER catalog_search returns nothing. The score only shortlists: ' +
+          'different art with the same colours and silhouette scores ~0.95. Trust the ' +
+          'verdict instead, from a pixel comparison of the trimmed art:\n' +
+          '  exact      identical pixels\n' +
+          '  same_art   same art, possibly resized or padded\n' +
+          '  review     close but uncertain (resize artefacts and real variants overlap) — look at it\n' +
+          '  different  not the same art\n' +
+          'Results are ranked by verdict, then score.\n\n' +
           'Requires UNITY_PROJECT_ROOT env var (set in .mcp.json) or project_root arg. ' +
           'Run rebuild_sprite_index first if the index is empty.',
         inputSchema: {
@@ -866,6 +967,12 @@ export function createSpriteTools(): ToolDefinition[] {
               maximum: 1,
               default: 0.5,
             },
+            verify: {
+              type: 'boolean',
+              description: 'Pixel-verify the shortlist and rank by verdict (default true)',
+              default: true,
+            },
+            sprite_roots: SPRITE_ROOTS_SCHEMA,
             project_root: {
               type: 'string',
               description: 'Absolute path to Unity project root (overrides UNITY_PROJECT_ROOT env)',
@@ -880,10 +987,11 @@ export function createSpriteTools(): ToolDefinition[] {
       tool: {
         name: 'rebuild_sprite_index',
         description:
-          'Scan Assets/Sprites/ and build (or update) the visual search index.\n\n' +
+          'Scan the sprite roots (Assets/Sprites or Assets/Sprite, or sprite_roots) and ' +
+          'build (or update) the visual search index.\n\n' +
           'Run this:\n' +
           '  - Before the first find_similar_sprites call\n' +
-          '  - After importing new sprites into Assets/Sprites/\n\n' +
+          '  - After importing new sprites into the sprite roots\n\n' +
           'Only re-hashes files whose modification time changed. ' +
           'Cold build over ~5,000 sprites takes ~90s (parallel worker threads); ' +
           'incremental runs take seconds.\n\n' +
@@ -892,6 +1000,7 @@ export function createSpriteTools(): ToolDefinition[] {
         inputSchema: {
           type: 'object',
           properties: {
+            sprite_roots: SPRITE_ROOTS_SCHEMA,
             project_root: {
               type: 'string',
               description: 'Absolute path to Unity project root (overrides UNITY_PROJECT_ROOT env)',
