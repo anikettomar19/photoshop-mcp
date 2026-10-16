@@ -4,7 +4,7 @@ An [MCP](https://modelcontextprotocol.io) server that lets AI assistants (Claude
 
 > Not affiliated with Adobe Inc.
 
-- **107 tools**: documents, layers, shapes, text, effects, filters, selections, exports, and offline PSD reading
+- **108 tools**: documents, layers, shapes, text, effects, filters, selections, exports, and offline PSD reading
 - **Unity-oriented extras**: RectTransform values from layer bounds, TextMeshPro effect values, a visual sprite search over a Unity project, and a one-call "PSD → Unity assets" export
 - **Built for agents**: forgiving arguments, errors that say what *does* exist, no modal dialogs blocking Photoshop, and outputs sized to fit in a tool result
 
@@ -77,7 +77,7 @@ The first launch clones and builds the server, so it takes a little longer. **Af
 | **Adjustments** (7) | `adjust_brightness_contrast`, `adjust_hue_saturation`, `apply_levels`, `auto_levels`, `auto_contrast`, `desaturate`, `invert` |
 | **Filters** (4) | `apply_gaussian_blur`, `apply_sharpen`, `apply_noise`, `apply_motion_blur` |
 | **Selections & masks** (10) | `select_rectangle`, `select_ellipse`, `select_layer_pixels`, `select_color_range`, `select_all`, `deselect`, `invert_selection`, `create_layer_mask`, `apply_layer_mask`, `delete_layer_mask` |
-| **Export** (2) | `export_layer_as_png`, `batch_export_layers` |
+| **Export** (3) | `export_layer_as_png`, `export_composite`, `batch_export_layers` |
 | **Smart objects** (2) | `replace_smart_object`, `swap_mockup_asset` |
 | **Placement & guides** (3) | `place_image`, `add_guide`, `clear_guides` |
 | **History & scripting** (5) | `undo`, `redo`, `get_history`, `play_action`, `execute_script` |
