@@ -257,12 +257,18 @@ export function scriptMoveIntoGroup(
     for (var n = target; n && n.typename !== 'Document'; n = n.parent) {
       if (n === layer) throw new Error('A group cannot be moved into itself.');
     }
-    ${
-      position === 'TOP'
-        ? 'layer.move(target, ElementPlacement.INSIDE);'
-        : `if (target.layers.length === 0) layer.move(target, ElementPlacement.INSIDE);
-    else layer.move(target.layers[target.layers.length - 1], ElementPlacement.PLACEAFTER);`
-    }`
+    // move(group, INSIDE) throws "Illegal Argument" when the layer is itself a
+    // group, and PLACEAFTER a child group lands outside the target. So the layer
+    // is placed before a child: the first one for TOP, or a placeholder art
+    // layer sent to the end of the group for BOTTOM (and for an empty group).
+    var placeholder = null;
+    if (${position === 'BOTTOM'} || target.layers.length === 0) {
+      placeholder = target.artLayers.add();
+      placeholder.move(target, ElementPlacement.PLACEATEND);
+      doc.activeLayer = layer;
+    }
+    layer.move(placeholder || target.layers[0], ElementPlacement.PLACEBEFORE);
+    if (placeholder) placeholder.remove();`
     }
     return { moved: true, layerName: layer.name, path: fullPath(layer) };
   `;
