@@ -318,7 +318,7 @@ export function scriptFlipLayer(
 export function scriptAlignLayers(a: AlignArgs): string {
   return `
     ${helpers}
-    var paths = ${JSON.stringify(a.layers)};
+    var paths = [${a.layers.map((p) => jsxString(p)).join(', ')}];
     var layers = [], boxes = [];
     for (var i = 0; i < paths.length; i++) {
       var l = psResolveLayerPath(doc, paths[i]);
@@ -360,7 +360,7 @@ export function scriptDistributeLayers(a: DistributeArgs): string {
   const [start, end] = h ? ['l', 'r'] : ['t', 'b'];
   return `
     ${helpers}
-    var paths = ${JSON.stringify(a.layers)};
+    var paths = [${a.layers.map((p) => jsxString(p)).join(', ')}];
     var items = [];
     for (var i = 0; i < paths.length; i++) {
       var l = psResolveLayerPath(doc, paths[i]);

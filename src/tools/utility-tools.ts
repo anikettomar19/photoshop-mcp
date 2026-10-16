@@ -1,8 +1,9 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
+import { parseHexColor } from './layer-effects-tools.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { LONG_SCRIPT_TIMEOUT_MS } from '../platform/script-executor.js';
-import { requireString, requireNumber } from '../utils/args.js';
+import { optionalNumber, requireString, requireNumber } from '../utils/args.js';
 import { jsxString } from '../utils/jsx.js';
 import { layerPathResolver } from '../api/extendscript.js';
 
@@ -80,6 +81,29 @@ export function createUtilityTools(connection: PhotoshopConnection): ToolDefinit
                 'When true (default), detect and apply clipping masks so the export matches ' +
                 'the Photoshop rendering. Set false to export the raw full layer without any clip.',
               default: true,
+            },
+            clip_to_canvas: {
+              type: 'boolean',
+              description:
+                'When true (default), anything outside the document canvas is cut off. Set false ' +
+                'to keep content and effects (shadows, glows) that extend past the canvas edge.',
+              default: true,
+            },
+            padding: {
+              type: 'number',
+              description: 'Transparent margin in px added on every side of the result (default 0)',
+            },
+            scale: {
+              type: 'number',
+              description:
+                'Resize the result by this percent, e.g. 200 for @2x (default 100). Layer ' +
+                'effects are scaled with it.',
+            },
+            background: {
+              type: 'string',
+              description:
+                'Hex colour to put behind the layer instead of transparency, e.g. "#FFFFFF" ' +
+                '(default: transparent)',
             },
           },
           required: ['output_path'],
@@ -439,6 +463,72 @@ async function sampleColorAtPixel(
   }
 }
 
+export interface ExportOptions {
+  padding: number;
+  scale: number;
+  background?: { r: number; g: number; b: number };
+  clipToCanvas: boolean;
+}
+
+/** Validates the optional export arguments. */
+export function exportOptions(args: Record<string, unknown>): ExportOptions {
+  const padding = optionalNumber(args, 'padding', 0);
+  if (!Number.isInteger(padding) || padding < 0 || padding > 4096) {
+    throw new Error(`padding must be a whole number of pixels from 0 to 4096, got ${padding}`);
+  }
+  const scale = optionalNumber(args, 'scale', 100);
+  if (scale <= 0 || scale > 1000)
+    throw new Error(`scale must be above 0 and at most 1000 (%), got ${scale}`);
+  const bg =
+    typeof args.background === 'string' && args.background !== '' ? args.background : undefined;
+  return {
+    padding,
+    scale,
+    background: bg === undefined ? undefined : parseHexColor(bg),
+    clipToCanvas: args.clip_to_canvas !== false,
+  };
+}
+
+/**
+ * ExtendScript run on the temp export document before it is saved: trim, then
+ * scale (effects scale with it), then pad, then put a solid background
+ * behind everything.
+ */
+export function exportFinishJs(trim: boolean, o: ExportOptions): string {
+  const lines: string[] = [];
+  if (trim)
+    lines.push('try { newDoc.trim(TrimType.TRANSPARENT, true, true, true, true); } catch(e) {}');
+  if (o.scale !== 100) {
+    // Image Size with "Scale Styles" on, so strokes, shadows and glows scale with
+    // the art; the DOM's resizeImage leaves them at their original size.
+    lines.push(
+      `var isz = new ActionDescriptor();`,
+      `isz.putUnitDouble(app.charIDToTypeID('Wdth'), app.charIDToTypeID('#Pxl'), Math.max(1, Math.round(newDoc.width.as('px') * ${o.scale} / 100)));`,
+      `isz.putBoolean(app.stringIDToTypeID('scaleStyles'), true);`,
+      `isz.putBoolean(app.charIDToTypeID('CnsP'), true);`,
+      `isz.putEnumerated(app.charIDToTypeID('Intr'), app.charIDToTypeID('Intp'), app.charIDToTypeID('Bcbc'));`,
+      `executeAction(app.charIDToTypeID('ImgS'), isz, DialogModes.NO);`
+    );
+  }
+  if (o.padding > 0) {
+    lines.push(
+      `newDoc.resizeCanvas(UnitValue(newDoc.width.as('px') + ${2 * o.padding}, 'px'), ` +
+        `UnitValue(newDoc.height.as('px') + ${2 * o.padding}, 'px'), AnchorPosition.MIDDLECENTER);`
+    );
+  }
+  if (o.background) {
+    const { r, g, b } = o.background;
+    lines.push(
+      `var bgLayer = newDoc.artLayers.add(); bgLayer.name = 'background';`,
+      `bgLayer.move(newDoc, ElementPlacement.PLACEATEND);`,
+      `newDoc.selection.selectAll(); var bgColor = new SolidColor();`,
+      `bgColor.rgb.red = ${r}; bgColor.rgb.green = ${g}; bgColor.rgb.blue = ${b};`,
+      `newDoc.selection.fill(bgColor); newDoc.selection.deselect();`
+    );
+  }
+  return lines.join('\n        ');
+}
+
 /**
  * After a failed export, closes the temp documents it may have left open (only
  * unsaved documents with exactly these names) and returns to the original
@@ -491,6 +581,8 @@ async function exportLayerAsPng(
   let origDocName: string | undefined;
   const api = await new PhotoshopAPIFactory(connection).createAPI();
   try {
+    const opts = exportOptions(args);
+    const finishJs = exportFinishJs(trim, opts);
     // Callers passed a layer path expecting it to be exported; without this the
     // tool silently exported whichever layer happened to be active.
     if (layerPath) {
@@ -586,6 +678,15 @@ async function exportLayerAsPng(
         for (var ai = 0; ai < info.ancestors.length; ai++) {
           info.ancestors[ai].visible = true;
         }
+        ${
+          opts.clipToCanvas
+            ? ''
+            : `// Copy Merged only takes what is on the canvas, so the canvas is grown
+        // to cover the layer and its effects first.
+        var lb = info.layer.bounds, W = dupDoc.width.as('px'), H = dupDoc.height.as('px');
+        var m = Math.max(0, -lb[0].as('px'), -lb[1].as('px'), lb[2].as('px') - W, lb[3].as('px') - H);
+        if (m > 0) dupDoc.resizeCanvas(UnitValue(W + 2 * m + 16, 'px'), UnitValue(H + 2 * m + 16, 'px'), AnchorPosition.MIDDLECENTER);`
+        }
 
         return { ready: true, clipBase: clipBase ? clipBase.name : null };
       `,
@@ -634,7 +735,7 @@ async function exportLayerAsPng(
         var newDoc = docByName(${jsxString(pasteDocName)});
         if (!newDoc) throw new Error('Paste document vanished: ' + ${jsxString(pasteDocName)});
         app.activeDocument = newDoc;
-        ${trim ? `try { newDoc.trim(TrimType.TRANSPARENT, true, true, true, true); } catch(e) {}` : ''}
+        ${finishJs}
 
         var saveFile = new File(${jsxString(outputPath)});
         var pngOpts = new PNGSaveOptions();
@@ -655,6 +756,9 @@ async function exportLayerAsPng(
           width: w,
           height: h,
           trimmed: ${trim},
+          scale: ${opts.scale},
+          padding: ${opts.padding},
+          clipToCanvas: ${opts.clipToCanvas},
           clippingApplied: true
         };
       `,
@@ -669,8 +773,17 @@ async function exportLayerAsPng(
         var origDoc = app.activeDocument;
         var srcLayer = origDoc.activeLayer;
 
+        ${
+          opts.clipToCanvas
+            ? 'var docW = origDoc.width, docH = origDoc.height, M = 0;'
+            : `// Sized to the layer's own bounds (effects included) plus a margin, so
+        // content and effects beyond the original canvas are kept.
+        var ob = srcLayer.bounds, M = 16;
+        var docW = UnitValue(Math.max(1, ob[2].as('px') - ob[0].as('px') + 2 * M), 'px');
+        var docH = UnitValue(Math.max(1, ob[3].as('px') - ob[1].as('px') + 2 * M), 'px');`
+        }
         var newDoc = app.documents.add(
-          origDoc.width, origDoc.height, origDoc.resolution,
+          docW, docH, origDoc.resolution,
           ${jsxString(simpleDocName)}, NewDocumentMode.RGB, DocumentFill.TRANSPARENT
         );
         app.activeDocument = origDoc;
@@ -679,6 +792,13 @@ async function exportLayerAsPng(
         // A hidden layer is exported as it looks when shown; only the copy is
         // made visible, so the original document is left as it was.
         newDoc.activeLayer.visible = true;
+        if (M > 0) {
+          // A layer copied into a document of another size lands centred, not at
+          // its old coordinates, so it is placed from where it actually is.
+          var nb = newDoc.activeLayer.bounds;
+          var dx = M - nb[0].as('px'), dy = M - nb[1].as('px');
+          if (dx !== 0 || dy !== 0) newDoc.activeLayer.translate(UnitValue(dx, 'px'), UnitValue(dy, 'px'));
+        }
 
         // Smart Objects may export blank after duplicate — rasterize to materialize pixels
         try {
@@ -687,7 +807,7 @@ async function exportLayerAsPng(
           }
         } catch(e) {}
 
-        ${trim ? `try { newDoc.trim(TrimType.TRANSPARENT, true, true, true, true); } catch(e) {}` : ''}
+        ${finishJs}
 
         var saveFile = new File(${jsxString(outputPath)});
         var pngOpts = new PNGSaveOptions();
@@ -706,6 +826,9 @@ async function exportLayerAsPng(
           width: w,
           height: h,
           trimmed: ${trim},
+          scale: ${opts.scale},
+          padding: ${opts.padding},
+          clipToCanvas: ${opts.clipToCanvas},
           clippingApplied: false
         };
       `,

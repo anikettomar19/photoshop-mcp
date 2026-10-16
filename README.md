@@ -4,7 +4,7 @@ An [MCP](https://modelcontextprotocol.io) server that lets AI assistants (Claude
 
 > Not affiliated with Adobe Inc.
 
-- **92 tools**: documents, layers, text, effects, filters, selections, exports, and offline PSD reading
+- **107 tools**: documents, layers, shapes, text, effects, filters, selections, exports, and offline PSD reading
 - **Unity-oriented extras**: RectTransform values from layer bounds, TextMeshPro effect values, a visual sprite search over a Unity project, and a one-call "PSD → Unity assets" export
 - **Built for agents**: forgiving arguments, errors that say what *does* exist, no modal dialogs blocking Photoshop, and outputs sized to fit in a tool result
 
@@ -72,7 +72,7 @@ The first launch clones and builds the server, so it takes a little longer. **Af
 | **Arrange & transform** (12) | `move_layer`, `scale_layer`, `rotate_layer`, `flip_layer`, `align_layers`, `distribute_layers`, `fit_layer_to_document`, `move_layer_up` / `_down` / `_to_top` / `_to_bottom`, `move_layer_to_position` |
 | **Text** (5) | `create_text_layer`, `update_text_content`, `set_text_font`, `set_text_color`, `set_text_alignment` |
 | **Shapes** (3) | `create_shape` (rectangle, rounded rectangle, ellipse), `set_shape_fill`, `set_shape_stroke` |
-| **Layer effects** (3) | `add_drop_shadow`, `add_stroke_effect`, `remove_layer_effects` |
+| **Layer effects** (4) | `add_drop_shadow`, `add_stroke_effect`, `add_gradient_overlay`, `remove_layer_effects` |
 | **Image & canvas** (4) | `resize_image`, `resize_canvas`, `crop_document`, `trim_document` |
 | **Adjustments** (7) | `adjust_brightness_contrast`, `adjust_hue_saturation`, `apply_levels`, `auto_levels`, `auto_contrast`, `desaturate`, `invert` |
 | **Filters** (4) | `apply_gaussian_blur`, `apply_sharpen`, `apply_noise`, `apply_motion_blur` |

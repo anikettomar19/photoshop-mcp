@@ -62,3 +62,12 @@ test('distribute needs 3 layers for even spacing, 2 with a fixed gap', () => {
     parses(`${axis} gap`, scriptDistributeLayers(distributeArgs({ layers: ['A', 'B'], axis, gap: 12 })));
   }
 });
+
+test('layer paths with a line-separator character still give valid script', () => {
+  const odd = 'Line\u2028Sep';
+  const s1 = scriptAlignLayers(alignArgs({ layers: [odd, 'B'], edge: 'LEFT' }));
+  assert.doesNotThrow(() => new Function(s1));
+  assert.ok(!s1.includes('\u2028'), 'U+2028 is escaped');
+  const s2 = scriptDistributeLayers(distributeArgs({ layers: [odd, 'B', 'C'], axis: 'HORIZONTAL' }));
+  assert.doesNotThrow(() => new Function(s2));
+});
