@@ -63,6 +63,28 @@ export function createSmartObjectTools(connection: PhotoshopConnection): ToolDef
       },
       handler: async (args) => replaceSmartObject(connection, args),
     },
+    {
+      tool: {
+        name: 'photoshop_open_smart_object',
+        description:
+          "Open a smart object's contents (its embedded .psb, or the linked file) as a document, " +
+          'like double-clicking its thumbnail. Returns the opened document, which becomes active, ' +
+          'and the parent it came from. Works on nested smart objects: call it again inside the ' +
+          'opened document. To change the smart object, edit the opened document, save it ' +
+          '(photoshop_save_document) and close it; the parent updates.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            layer_path: {
+              type: 'string',
+              description:
+                'Smart object layer path, e.g. "Popup/Badge" (default: the active layer)',
+            },
+          },
+        },
+      },
+      handler: async (args) => openSmartObject(connection, args),
+    },
   ];
 }
 
@@ -289,6 +311,73 @@ async function replaceSmartObject(
         {
           type: 'text' as const,
           text: `Error replacing smart object: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
+  }
+}
+
+export function scriptOpenSmartObject(layerPath: string | undefined): string {
+  return `
+    ${layerPathResolver}
+    if (app.documents.length === 0) throw new Error('No active document');
+    var doc = app.activeDocument;
+    var layer = ${layerPath === undefined ? 'doc.activeLayer' : `psResolveLayerPath(doc, ${jsxString(layerPath)})`};
+    if (layer.typename === 'LayerSet' || layer.kind !== LayerKind.SMARTOBJECT) {
+      throw new Error('Layer "' + layer.name + '" is not a smart object (' +
+        (layer.typename === 'LayerSet' ? 'group' : String(layer.kind)) + '). Use photoshop_find_layers ' +
+        'with kinds ["SMARTOBJECT"] or photoshop_list_smart_objects to find one.');
+    }
+    psActivate(doc, layer);
+    var linked = false;
+    try {
+      var lref = new ActionReference();
+      lref.putEnumerated(app.charIDToTypeID('Lyr '), app.charIDToTypeID('Ordn'), app.charIDToTypeID('Trgt'));
+      linked = executeActionGet(lref).getObjectValue(app.stringIDToTypeID('smartObject'))
+        .getBoolean(app.stringIDToTypeID('linked'));
+    } catch (e) {}
+    var before = app.documents.length;
+    // DOM layers have no editContents(); this is the "Edit Contents" command.
+    executeAction(app.stringIDToTypeID('placedLayerEditContents'), new ActionDescriptor(), DialogModes.NO);
+    var opened = app.activeDocument;
+    if (opened === doc) throw new Error('Photoshop did not open the contents of "' + layer.name + '".');
+    var path = '';
+    try { path = opened.fullName.fsName; } catch (e) {}
+    return {
+      opened: true,
+      document: opened.name,
+      width: Math.round(opened.width.as('px')),
+      height: Math.round(opened.height.as('px')),
+      layerCount: opened.layers.length,
+      linked: linked,
+      alreadyOpen: app.documents.length === before,
+      file: path,
+      parentDocument: doc.name,
+      parentLayer: layer.name
+    };
+  `;
+}
+
+async function openSmartObject(
+  connection: PhotoshopConnection,
+  args: Record<string, unknown>
+): Promise<ToolResult> {
+  try {
+    const layerPath =
+      typeof args.layer_path === 'string' && args.layer_path !== '' ? args.layer_path : undefined;
+    const api = await new PhotoshopAPIFactory(connection).createAPI();
+    const result = await api.executeScript(
+      scriptOpenSmartObject(layerPath),
+      LONG_SCRIPT_TIMEOUT_MS
+    );
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error opening smart object: ${error instanceof Error ? error.message : String(error)}`,
         },
       ],
       isError: true,
