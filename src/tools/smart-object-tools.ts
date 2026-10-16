@@ -147,7 +147,7 @@ export function scriptReplaceSmartObject(
       );
     }
 
-    doc.activeLayer = layer;
+    psActivate(doc, layer);
 
     // ── Record original bounds ─────────────────────────────────────────────
     var origBounds = layer.bounds;

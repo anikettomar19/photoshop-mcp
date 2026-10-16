@@ -34,7 +34,7 @@ function scriptGetLayerBounds(layerPath: string): string {
     if (!app.documents.length) throw new Error('No active document');
     var doc = app.activeDocument;
     var layer = psResolveLayerPath(doc, ${pathLiteral});
-    doc.activeLayer = layer;
+    psActivate(doc, layer);
     var b = layer.bounds;
     return {
       layerName: layer.name,

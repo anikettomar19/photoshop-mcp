@@ -99,10 +99,16 @@ export function createLayerPropertiesTools(connection: PhotoshopConnection): Too
     {
       tool: {
         name: 'photoshop_rename_layer',
-        description: 'Rename the active layer',
+        description:
+          'Rename a layer: the one at layer_path if given, otherwise the active layer. ' +
+          'Its visibility is kept (a hidden layer stays hidden).',
         inputSchema: {
           type: 'object',
           properties: {
+            layer_path: {
+              type: 'string',
+              description: 'Layer path, e.g. "HUD/PlayButton" (default: the active layer)',
+            },
             name: {
               type: 'string',
               description: 'New name for the layer',
@@ -296,12 +302,14 @@ async function renameLayer(
   args: Record<string, unknown>
 ): Promise<ToolResult> {
   const name = requireString(args, 'name');
+  const layerPath =
+    typeof args.layer_path === 'string' && args.layer_path !== '' ? args.layer_path : undefined;
 
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);
     const api = await apiFactory.createAPI();
 
-    const script = ExtendScriptSnippets.renameLayer(name);
+    const script = ExtendScriptSnippets.renameLayer(name, layerPath);
     const result = await api.executeScript(script);
 
     return {
