@@ -76,6 +76,7 @@ const ARGS = {
   moveLayerToBottom: [],
   moveLayerUp: [],
   getLayerTree: [NASTY, 2],
+  findLayers: [{ pattern: '^x', caseSensitive: false, under: NASTY, kinds: ['TEXT'], visibleOnly: true, intersects: { left: 0, top: 0, right: 10, bottom: 10 }, limit: 5 }],
   selectLayerByPath: [NASTY],
   createLayerGroup: [NASTY],
   getLayerRT: [NASTY, 1],
