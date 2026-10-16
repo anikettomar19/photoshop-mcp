@@ -163,8 +163,20 @@ export function createLayerEffectsTools(connection: PhotoshopConnection): ToolDe
               description: 'Gradient style (default LINEAR)',
               default: 'LINEAR',
             },
-            opacity: { type: 'number', minimum: 0, maximum: 100, default: 100, description: 'Opacity %' },
-            scale: { type: 'number', minimum: 10, maximum: 150, default: 100, description: 'Scale %' },
+            opacity: {
+              type: 'number',
+              minimum: 0,
+              maximum: 100,
+              default: 100,
+              description: 'Opacity %',
+            },
+            scale: {
+              type: 'number',
+              minimum: 10,
+              maximum: 150,
+              default: 100,
+              description: 'Scale %',
+            },
             reverse: { type: 'boolean', default: false, description: 'Reverse the gradient' },
           },
           required: ['stops'],
@@ -246,12 +258,14 @@ export function parseHexColor(hex: string): { r: number; g: number; b: number } 
 export function normalizeGradientStops(
   raw: unknown
 ): Array<{ r: number; g: number; b: number; location: number }> {
-  if (!Array.isArray(raw) || raw.length < 2) throw new Error('stops must be an array of at least 2 stops');
+  if (!Array.isArray(raw) || raw.length < 2)
+    throw new Error('stops must be an array of at least 2 stops');
   return raw
     .map((st) => {
       const o = st as { color?: unknown; location?: unknown };
       const loc = Number(o.location);
-      if (!Number.isFinite(loc) || loc < 0 || loc > 100) throw new Error(`Stop location must be 0-100, got ${o.location}`);
+      if (!Number.isFinite(loc) || loc < 0 || loc > 100)
+        throw new Error(`Stop location must be 0-100, got ${o.location}`);
       return { ...parseHexColor(String(o.color)), location: Math.round((loc / 100) * 4096) };
     })
     .sort((a, b) => a.location - b.location);
@@ -538,7 +552,11 @@ async function addGradientOverlay(
     const opacity = optionalNumber(args, 'opacity', 100);
     const scale = optionalNumber(args, 'scale', 100);
     const reverse = args.reverse === true;
-    const typeName = jsxEnum(String(args.type ?? 'LINEAR').toUpperCase(), GRADIENT_TYPES, 'gradient type');
+    const typeName = jsxEnum(
+      String(args.type ?? 'LINEAR').toUpperCase(),
+      GRADIENT_TYPES,
+      'gradient type'
+    );
     const stopJsx = stops
       .map(
         (st) => `cl.putObject(cTID('Clrt'), colorStop(${st.r}, ${st.g}, ${st.b}, ${st.location}));`
