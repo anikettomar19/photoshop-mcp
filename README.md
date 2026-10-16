@@ -74,7 +74,8 @@ The first launch clones and builds the server, so it takes a little longer. **Af
 | **Shapes** (3) | `create_shape` (rectangle, rounded rectangle, ellipse), `set_shape_fill`, `set_shape_stroke` |
 | **Layer effects** (4) | `add_drop_shadow`, `add_stroke_effect`, `add_gradient_overlay`, `remove_layer_effects` |
 | **Image & canvas** (4) | `resize_image`, `resize_canvas`, `crop_document`, `trim_document` |
-| **Adjustments** (7) | `adjust_brightness_contrast`, `adjust_hue_saturation`, `apply_levels`, `auto_levels`, `auto_contrast`, `desaturate`, `invert` |
+| **Adjustments** (8) | `adjust_brightness_contrast`, `adjust_hue_saturation`, `apply_levels`, `apply_curves`, `auto_levels`, `auto_contrast`, `desaturate`, `invert` |
+| **Non-destructive** (3) | `add_adjustment_layer` (brightness/contrast, levels, curves, hue/saturation, vibrance, black & white, invert), `add_fill_layer` (solid or gradient), `set_clipping_mask` |
 | **Filters** (4) | `apply_gaussian_blur`, `apply_sharpen`, `apply_noise`, `apply_motion_blur` |
 | **Selections & masks** (10) | `select_rectangle`, `select_ellipse`, `select_layer_pixels`, `select_color_range`, `select_all`, `deselect`, `invert_selection`, `create_layer_mask`, `apply_layer_mask`, `delete_layer_mask` |
 | **Export** (3) | `export_layer_as_png`, `export_composite`, `batch_export_layers` |
