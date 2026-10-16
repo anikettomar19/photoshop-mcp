@@ -1,0 +1,42 @@
+name: Bug report
+description: A tool returned a wrong result, an error, or changed something it shouldn't have.
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Agents can draft this for you with the `photoshop_report_issue` tool, which fills in versions and recent failed calls.
+        Check the text for private file, layer or project names before submitting.
+  - type: input
+    id: tool
+    attributes:
+      label: Tool
+      description: The tool involved, e.g. photoshop_export_layer_as_png
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps or the failing call
+      description: The arguments passed, or the steps to reproduce it.
+  - type: textarea
+    id: error-output
+    attributes:
+      label: Error output
+      description: Error text or recent failed calls (from ~/.photoshop-mcp/errors.jsonl).
+      render: text
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: photoshop-mcp version, Photoshop version, OS.
+      render: text
