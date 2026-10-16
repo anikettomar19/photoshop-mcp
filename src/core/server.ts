@@ -23,6 +23,7 @@ import { createSelectionTools } from '../tools/selection-tools.js';
 import { createActionTools } from '../tools/action-tools.js';
 import { createHistoryTools } from '../tools/history-tools.js';
 import { createLayerOrderingTools } from '../tools/layer-ordering-tools.js';
+import { createLayerOrganizeTools } from '../tools/layer-organize-tools.js';
 import { createPsdTools } from '../tools/psd-tools.js';
 import { createUtilityTools } from '../tools/utility-tools.js';
 import { createLayerEffectsTools } from '../tools/layer-effects-tools.js';
@@ -153,6 +154,11 @@ export class PhotoshopMCPServer {
 
     const layerOrderingTools = createLayerOrderingTools(connection);
     layerOrderingTools.forEach((tool) => {
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
+    });
+
+    const layerOrganizeTools = createLayerOrganizeTools(connection);
+    layerOrganizeTools.forEach((tool) => {
       this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
