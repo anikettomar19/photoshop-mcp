@@ -1,7 +1,7 @@
 import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
-import { requireString } from '../utils/args.js';
+import { requireNumber, requireString } from '../utils/args.js';
 import { BLEND_MODES, ExtendScriptSnippets } from '../api/extendscript.js';
 
 export function createLayerPropertiesTools(connection: PhotoshopConnection): ToolDefinition[] {
@@ -35,6 +35,28 @@ export function createLayerPropertiesTools(connection: PhotoshopConnection): Too
         },
       },
       handler: async (args) => setLayerOpacity(connection, args),
+    },
+    {
+      tool: {
+        name: 'photoshop_set_fill_opacity',
+        description:
+          "Set the fill opacity of the active layer: fades the layer's own pixels or fill but not " +
+          'its layer effects. At 0 only the effects show (e.g. a glow or stroke with no body). ' +
+          'Use photoshop_set_layer_opacity to fade both.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            fill_opacity: {
+              type: 'number',
+              description: 'Fill opacity (0-100)',
+              minimum: 0,
+              maximum: 100,
+            },
+          },
+          required: ['fill_opacity'],
+        },
+      },
+      handler: async (args) => setFillOpacity(connection, args),
     },
     {
       tool: {
@@ -179,6 +201,46 @@ export function createLayerPropertiesTools(connection: PhotoshopConnection): Too
       handler: async () => flattenImage(connection),
     },
   ];
+}
+
+export function scriptSetFillOpacity(fillOpacity: number): string {
+  return `
+    if (app.documents.length === 0) throw new Error('No active document');
+    var layer = app.activeDocument.activeLayer;
+    if (layer.isBackgroundLayer) {
+      throw new Error('The Background layer has no fill opacity; convert it to a normal layer first.');
+    }
+    if (layer.typename === 'LayerSet') {
+      throw new Error('Groups have no fill opacity; select a layer inside "' + layer.name + '".');
+    }
+    layer.fillOpacity = ${fillOpacity};
+    return { updated: true, layerName: layer.name, fillOpacity: Math.round(layer.fillOpacity), opacity: Math.round(layer.opacity) };
+  `;
+}
+
+async function setFillOpacity(
+  connection: PhotoshopConnection,
+  args: Record<string, unknown>
+): Promise<ToolResult> {
+  try {
+    const fillOpacity = requireNumber(args, 'fill_opacity');
+    if (fillOpacity < 0 || fillOpacity > 100) {
+      throw new Error(`fill_opacity must be between 0 and 100, got ${fillOpacity}`);
+    }
+    const api = await new PhotoshopAPIFactory(connection).createAPI();
+    const result = await api.executeScript(scriptSetFillOpacity(fillOpacity));
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error setting fill opacity: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
+  }
 }
 
 async function setLayerOpacity(
