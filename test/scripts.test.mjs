@@ -37,6 +37,7 @@ const ARGS = {
   setLayerOpacity: [50],
   setLayerBlendMode: ['MULTIPLY'],
   setLayerVisibility: [false, NASTY],
+  setLayersVisibility: [true, [NASTY, 'B'], '^x', NASTY, true],
   setLayerLocked: [true],
   renameLayer: [NASTY],
   duplicateLayer: [NASTY],

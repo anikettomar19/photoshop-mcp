@@ -826,6 +826,91 @@ export const ExtendScriptSnippets = {
   `,
 
   /**
+   * Show or hide many layers in one script: explicit paths and/or every layer
+   * whose name matches a pattern (optionally under a group). Every path is
+   * resolved before anything changes, so a typo changes nothing. The changes are
+   * grouped as one history step, which only matters when Photoshop's "Make
+   * Layer Visibility Changes Undoable" preference is on (off by default).
+   */
+  setLayersVisibility: (
+    visible: boolean,
+    paths: string[],
+    namePattern: string | undefined,
+    under: string | undefined,
+    withParents: boolean
+  ) => `
+    ${layerPathResolver}
+    if (app.documents.length === 0) {
+      throw new Error('No active document');
+    }
+    var doc = app.activeDocument;
+    function fullPath(l) {
+      var parts = [];
+      for (var n = l; n && n.typename !== 'Document'; n = n.parent) parts.unshift(n.name);
+      return parts.join('/');
+    }
+
+    var targets = [], missing = [], seen = {};
+    function add(l) {
+      var key = fullPath(l) + '#' + l.itemIndex;
+      if (!seen[key]) { seen[key] = true; targets.push(l); }
+    }
+    var paths = [${paths.map((p) => jsxString(p)).join(', ')}];
+    for (var i = 0; i < paths.length; i++) {
+      try { add(psResolveLayerPath(doc, paths[i])); } catch (e) { missing.push(paths[i] + ' (' + e.message + ')'); }
+    }
+    ${
+      namePattern === undefined
+        ? ''
+        : `var re = new RegExp(${jsxString(namePattern)});
+    var root = ${under === undefined ? 'doc' : `psResolveLayerPath(doc, ${jsxString(under)})`};
+    if (root.typename !== 'Document' && root.typename !== 'LayerSet') throw new Error('"under" must be a group: ' + root.name);
+    var matched = 0;
+    (function walk(layers) {
+      for (var k = 0; k < layers.length; k++) {
+        if (re.test(layers[k].name)) { add(layers[k]); matched++; }
+        if (layers[k].typename === 'LayerSet') walk(layers[k].layers);
+      }
+    })(root.layers);
+    if (matched === 0) missing.push('no layer name matches /' + re.source + '/' + ${under === undefined ? "''" : `' under ' + ${jsxString(under)}`});`
+    }
+    if (missing.length) {
+      throw new Error('Nothing was changed. Not found: ' + missing.join('; '));
+    }
+
+    var changes = [];
+    $.global.__psVisApply = function () {
+      for (var t = 0; t < targets.length; t++) {
+        var l = targets[t];
+        if (l.isBackgroundLayer && !${visible}) {
+          changes.push({ path: fullPath(l), skipped: 'Background layer cannot be hidden this way' });
+          continue;
+        }
+        var was = l.visible;
+        if (was !== ${visible}) l.visible = ${visible};
+        ${
+          withParents && visible
+            ? `for (var n = l.parent; n && n.typename !== 'Document'; n = n.parent) {
+          if (!n.visible) n.visible = true;
+        }`
+            : ''
+        }
+        changes.push({ path: fullPath(l), was: was, now: l.visible });
+      }
+    };
+    doc.suspendHistory(${jsxString(visible ? 'Show layers' : 'Hide layers')}, '__psVisApply()');
+    var changed = 0;
+    for (var c = 0; c < changes.length; c++) if (changes[c].was !== changes[c].now && !changes[c].skipped) changed++;
+    return {
+      visible: ${visible},
+      matched: changes.length,
+      changed: changed,
+      layers: changes.length > 200 ? changes.slice(0, 200) : changes,
+      truncated: changes.length > 200
+    };
+  `,
+
+  /**
    * Lock/unlock layer
    */
   setLayerLocked: (locked: boolean) => `

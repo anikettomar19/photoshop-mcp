@@ -58,8 +58,12 @@ export function createLayerPropertiesTools(connection: PhotoshopConnection): Too
       tool: {
         name: 'photoshop_set_layer_visibility',
         description:
-          'Show or hide a layer. Targets the layer at "path" when given, otherwise the active layer. ' +
-          'Prefer passing "path" — toggling the active layer mutates whatever the user last clicked.',
+          'Show or hide layers. One layer: "path" (otherwise the active layer; prefer passing a ' +
+          'path, since the active layer is whatever the user last clicked). Many layers in one ' +
+          'call: "paths", and/or "name_pattern" (a regex on layer names, ' +
+          'searched in all nested groups, or only under the group "under"). If any path is ' +
+          'missing nothing changes. with_parents: true also shows hidden groups above a layer ' +
+          'being shown, so it actually appears.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -72,6 +76,23 @@ export function createLayerPropertiesTools(connection: PhotoshopConnection): Too
               description:
                 'Optional layer path, e.g. "Tier/Group 1050". Append [n] to a segment to pick between ' +
                 'identically named siblings. Omit to act on the active layer.',
+            },
+            paths: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Several layer or group paths, changed together',
+            },
+            name_pattern: {
+              type: 'string',
+              description: 'Regex matched against layer names, e.g. "^OLD " or "pointer|arrow"',
+            },
+            under: {
+              type: 'string',
+              description: 'Group path that limits name_pattern to its contents',
+            },
+            with_parents: {
+              type: 'boolean',
+              description: 'When showing, also show hidden groups above each layer (default false)',
             },
           },
           required: ['visible'],
@@ -228,28 +249,77 @@ async function setLayerBlendMode(
   }
 }
 
+export interface VisibilityArgs {
+  visible: boolean;
+  path?: string;
+  paths: string[];
+  namePattern?: string;
+  under?: string;
+  withParents: boolean;
+}
+
+/** Validates set_layer_visibility arguments; throws on anything that can't run. */
+export function visibilityArgs(args: Record<string, unknown>): VisibilityArgs {
+  if (typeof args.visible !== 'boolean') {
+    throw new Error(
+      `missing or invalid required argument "visible" (got ${JSON.stringify(args.visible)})`
+    );
+  }
+  const str = (v: unknown) => (typeof v === 'string' && v !== '' ? v : undefined);
+  const paths = args.paths === undefined ? [] : args.paths;
+  if (!Array.isArray(paths) || !paths.every((p) => typeof p === 'string' && p !== '')) {
+    throw new Error('paths must be an array of layer paths');
+  }
+  const namePattern = str(args.name_pattern);
+  if (namePattern !== undefined) {
+    try {
+      new RegExp(namePattern);
+    } catch (e) {
+      throw new Error(`name_pattern is not a valid regex: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+  const under = str(args.under);
+  if (under !== undefined && namePattern === undefined) {
+    throw new Error('"under" only applies together with name_pattern');
+  }
+  return {
+    visible: args.visible,
+    path: str(args.path),
+    paths: paths as string[],
+    namePattern,
+    under,
+    withParents: args.with_parents === true,
+  };
+}
+
 async function setLayerVisibility(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const visible = args.visible as boolean;
-  const path = typeof args.path === 'string' && args.path !== '' ? args.path : undefined;
-
   try {
-    const apiFactory = new PhotoshopAPIFactory(connection);
-    const api = await apiFactory.createAPI();
-
-    const script = ExtendScriptSnippets.setLayerVisibility(visible, path);
-    await api.executeScript(script);
-
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `Layer ${visible ? 'shown' : 'hidden'}`,
-        },
-      ],
-    };
+    const a = visibilityArgs(args);
+    const api = await new PhotoshopAPIFactory(connection).createAPI();
+    const batch = a.paths.length > 0 || a.namePattern !== undefined || a.withParents;
+    if (!batch) {
+      await api.executeScript(ExtendScriptSnippets.setLayerVisibility(a.visible, a.path));
+      return {
+        content: [{ type: 'text' as const, text: `Layer ${a.visible ? 'shown' : 'hidden'}` }],
+      };
+    }
+    const paths = a.path !== undefined ? [a.path, ...a.paths] : a.paths;
+    if (paths.length === 0 && a.namePattern === undefined) {
+      throw new Error('with_parents needs a path, paths or name_pattern');
+    }
+    const result = await api.executeScript(
+      ExtendScriptSnippets.setLayersVisibility(
+        a.visible,
+        paths,
+        a.namePattern,
+        a.under,
+        a.withParents
+      )
+    );
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
     return {
       content: [
