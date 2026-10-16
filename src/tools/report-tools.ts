@@ -109,9 +109,7 @@ export function buildIssueDraft(
     fields: {
       need: text('what_happened'),
       'proposed-tool': text('expected'),
-      workaround: [text('steps'), tool ? `Tool used instead: ${tool}` : '']
-        .filter(Boolean)
-        .join('\n'),
+      workaround: [text('steps'), tool ? `Related tool: ${tool}` : ''].filter(Boolean).join('\n'),
       environment,
     },
   };

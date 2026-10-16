@@ -47,15 +47,21 @@ export const LONG_SCRIPT_TIMEOUT_MS = Math.max(DEFAULT_SCRIPT_TIMEOUT_MS, 300_00
 export function parseScriptOutput(output: string): unknown {
   const trimmed = output.trim();
 
-  if (trimmed.startsWith('ERROR:')) {
-    throw new Error(trimmed.substring(6).trim());
+  let value: unknown;
+  try {
+    value = JSON.parse(trimmed);
+  } catch {
+    value = trimmed;
   }
 
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return trimmed;
+  // On some machines osascript prints the script's string result in quotes
+  // ("ERROR: ..."), so the prefix is checked after unquoting too. Without
+  // this, every failed script on those machines came back as a success and
+  // was never logged.
+  if (typeof value === 'string' && value.trim().startsWith('ERROR:')) {
+    throw new Error(value.trim().substring(6).trim());
   }
+  return value;
 }
 
 /**
