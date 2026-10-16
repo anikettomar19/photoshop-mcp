@@ -69,6 +69,7 @@ The first launch clones and builds the server, so it takes a little longer. **Af
 | **Layer properties** (5) | `set_layer_opacity`, `set_layer_blend_mode`, `set_layer_visibility`, `set_layer_locked`, `rasterize_layer` |
 | **Arrange & transform** (9) | `move_layer`, `scale_layer`, `rotate_layer`, `fit_layer_to_document`, `move_layer_up` / `_down` / `_to_top` / `_to_bottom`, `move_layer_to_position` |
 | **Text** (5) | `create_text_layer`, `update_text_content`, `set_text_font`, `set_text_color`, `set_text_alignment` |
+| **Shapes** (3) | `create_shape` (rectangle, rounded rectangle, ellipse), `set_shape_fill`, `set_shape_stroke` |
 | **Layer effects** (3) | `add_drop_shadow`, `add_stroke_effect`, `remove_layer_effects` |
 | **Image & canvas** (3) | `resize_image`, `resize_canvas`, `crop_document` |
 | **Adjustments** (7) | `adjust_brightness_contrast`, `adjust_hue_saturation`, `apply_levels`, `auto_levels`, `auto_contrast`, `desaturate`, `invert` |
