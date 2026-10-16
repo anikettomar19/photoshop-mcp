@@ -312,7 +312,7 @@ export function scriptSelectLayerPixels(
     if (layer.isBackgroundLayer) throw new Error('The Background layer has no transparency; use photoshop_select_all.');
 
     function loadContent() {
-      doc.activeLayer = layer;
+      psActivate(doc, layer);
       var lr = new ActionReference();
       lr.putEnumerated(cTID('Lyr '), cTID('Ordn'), cTID('Trgt'));
       var ld = executeActionGet(lr);
@@ -350,7 +350,7 @@ export function scriptSelectLayerPixels(
       newCh.remove();
       doc.activeChannels = doc.componentChannels;
     }
-    doc.activeLayer = previous;
+    psActivate(doc, previous);
     return selectionSummary({ layerName: layer.name, mode: mode, source: vector ? 'vector mask' : 'pixels' });
   `;
 }
