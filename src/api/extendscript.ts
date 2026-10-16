@@ -2060,6 +2060,158 @@ export const ExtendScriptSnippets = {
   `,
 
   /**
+   * Find layers by name pattern and filters, fast on large documents.
+   *
+   * Pass 1 reads only each layer's name and group marker through
+   * ActionManager (the same flat walk as getLayerTree) to build paths, with
+   * "[n]" added where siblings share a name. Pass 2 reads kind, visibility and
+   * bounds only for name matches, so the cost grows with matches rather than
+   * document size. Groups get the union of their contents' bounds, as the DOM
+   * reports it (ActionManager gives a group the whole canvas).
+   */
+  findLayers: (o: {
+    pattern?: string;
+    caseSensitive: boolean;
+    under?: string;
+    kinds: string[];
+    visibleOnly: boolean;
+    intersects?: { left: number; top: number; right: number; bottom: number };
+    limit: number;
+  }) => `
+    ${layerPathResolver}
+    ${jsonStringifyHelper}
+    if (app.documents.length === 0) {
+      throw new Error('No active document');
+    }
+    var doc = app.activeDocument;
+    function cTID(s) { return app.charIDToTypeID(s); }
+    function sTID(s) { return app.stringIDToTypeID(s); }
+    function tSID(t) { return app.typeIDToStringID(t); }
+    function layerRef(index, prop) {
+      var r = new ActionReference();
+      if (prop) r.putProperty(cTID('Prpr'), sTID(prop));
+      r.putIndex(cTID('Lyr '), index);
+      return r;
+    }
+    function getProp(index, prop) {
+      try { return executeActionGet(layerRef(index, prop)); } catch (e) { return null; }
+    }
+    var docRef = new ActionReference();
+    docRef.putEnumerated(cTID('Dcmn'), cTID('Ordn'), cTID('Trgt'));
+    var layerCount = executeActionGet(docRef).getInteger(sTID('numberOfLayers'));
+    var firstIndex = getProp(0, 'layerID') ? 0 : 1;
+
+    // Pass 1: names, nesting and visibility of every layer, top to bottom.
+    var root = { children: [], node: null };
+    var stack = [root], all = [];
+    for (var i = layerCount; i >= firstIndex; i--) {
+      var sec = getProp(i, 'layerSection');
+      if (!sec) continue;
+      var section = tSID(sec.getEnumerationValue(sTID('layerSection')));
+      if (section === 'layerSectionEnd') { if (stack.length > 1) stack.pop(); continue; }
+      var parent = stack[stack.length - 1];
+      var node = {
+        index: i,
+        name: getProp(i, 'name').getString(cTID('Nm  ')),
+        visible: getProp(i, 'visible').getBoolean(cTID('Vsbl')),
+        isGroup: section === 'layerSectionStart',
+        parent: parent,
+        children: []
+      };
+      parent.children.push(node);
+      all.push(node);
+      if (node.isGroup) stack.push(node);
+    }
+    function segment(n) {
+      var sib = n.parent.children, count = 0, pos = 0;
+      for (var k = 0; k < sib.length; k++) {
+        if (sib[k].name === n.name) { if (sib[k] === n) pos = count; count++; }
+      }
+      return count > 1 ? n.name + '[' + pos + ']' : n.name;
+    }
+    function pathOf(n) {
+      var parts = [];
+      for (var x = n; x && x !== root; x = x.parent) parts.unshift(segment(x));
+      return parts.join('/');
+    }
+    function shown(n) {
+      for (var x = n; x && x !== root; x = x.parent) if (!x.visible) return false;
+      return true;
+    }
+
+    var scope = all;
+    ${
+      o.under === undefined
+        ? ''
+        : `var underPath = ${jsxString(o.under)}, underNode = null;
+    for (var u = 0; u < all.length; u++) if (all[u].isGroup && pathOf(all[u]) === underPath) { underNode = all[u]; break; }
+    if (!underNode) {
+      // Gives the resolver's own "not found / ambiguous" message when it applies.
+      psResolveLayerPath(doc, underPath);
+      throw new Error('"under" must be a group path: ' + underPath);
+    }
+    scope = [];
+    (function collect(n) { for (var c = 0; c < n.children.length; c++) { scope.push(n.children[c]); collect(n.children[c]); } })(underNode);`
+    }
+
+    var re = ${o.pattern === undefined ? 'null' : `new RegExp(${jsxString(o.pattern)}, ${o.caseSensitive ? "''" : "'i'"})`};
+    var KIND = { 1: 'PIXEL', 12: 'PIXEL', 2: 'ADJUSTMENT', 3: 'TEXT', 4: 'FILL', 9: 'FILL', 10: 'FILL', 11: 'FILL',
+                 5: 'SMARTOBJECT', 6: 'VIDEO', 8: '3D' };
+    var wantKinds = ${JSON.stringify(o.kinds)};
+    var box = ${o.intersects === undefined ? 'null' : JSON.stringify(o.intersects)};
+    function px(b, key) { return Math.round(b.getUnitDoubleValue(sTID(key))); }
+    function leafBounds(n) {
+      var d = getProp(n.index, 'bounds');
+      if (!d) return null;
+      var b = d.getObjectValue(sTID('bounds'));
+      return { left: px(b, 'left'), top: px(b, 'top'), right: px(b, 'right'), bottom: px(b, 'bottom') };
+    }
+    function boundsOf(n) {
+      if (!n.isGroup) return leafBounds(n);
+      var u = null;
+      (function grow(g) {
+        for (var c = 0; c < g.children.length; c++) {
+          var ch = g.children[c];
+          if (ch.isGroup) { grow(ch); continue; }
+          var b = leafBounds(ch);
+          if (!b || b.right <= b.left || b.bottom <= b.top) continue;
+          if (!u) { u = { left: b.left, top: b.top, right: b.right, bottom: b.bottom }; continue; }
+          if (b.left < u.left) u.left = b.left; if (b.top < u.top) u.top = b.top;
+          if (b.right > u.right) u.right = b.right; if (b.bottom > u.bottom) u.bottom = b.bottom;
+        }
+      })(n);
+      return u || { left: 0, top: 0, right: 0, bottom: 0 };
+    }
+
+    // Pass 2: filters, cheapest first; details only for what is left.
+    var found = [], total = 0, limit = ${o.limit};
+    for (var m = 0; m < scope.length; m++) {
+      var n = scope[m];
+      if (re && !re.test(n.name)) continue;
+      if (${o.visibleOnly} && !shown(n)) continue;
+      var kind = 'GROUP';
+      if (!n.isGroup) {
+        var kd = getProp(n.index, 'layerKind');
+        kind = kd ? (KIND[kd.getInteger(sTID('layerKind'))] || 'OTHER') : 'PIXEL';
+      }
+      if (wantKinds.length && ('|' + wantKinds.join('|') + '|').indexOf('|' + kind + '|') < 0) continue;
+      var b = boundsOf(n);
+      if (box && (!b || b.right <= box.left || b.left >= box.right || b.bottom <= box.top || b.top >= box.bottom)) continue;
+      total++;
+      if (found.length >= limit) continue;
+      found.push({
+        path: pathOf(n),
+        name: n.name,
+        kind: kind,
+        visible: n.visible,
+        shown: shown(n),
+        bounds: b ? { left: b.left, top: b.top, right: b.right, bottom: b.bottom, width: b.right - b.left, height: b.bottom - b.top } : null
+      });
+    }
+    return psJSON({ documentName: doc.name, matched: total, returned: found.length, truncated: total > found.length, layers: found });
+  `,
+
+  /**
    * Select a layer by its path through the group hierarchy.
    * Path format: "GroupName/SubGroupName/LayerName"
    * Also supports flat layer name (no slash).

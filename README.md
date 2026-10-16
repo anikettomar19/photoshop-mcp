@@ -66,7 +66,7 @@ The first launch clones and builds the server, so it takes a little longer. **Af
 | Area | Tools |
 |---|---|
 | **Documents** (6) | `create_document`, `open_image`, `save_document`, `close_document`, `duplicate_document`, `set_active_document` |
-| **Inspect** (8) | `get_layer_tree`, `get_layers`, `get_document_info`, `get_session_info`, `get_selection_info`, `get_layer_effects`, `list_smart_objects`, `sample_color_at_pixel` |
+| **Inspect** (9) | `get_layer_tree`, `find_layers`, `get_layers`, `get_document_info`, `get_session_info`, `get_selection_info`, `get_layer_effects`, `list_smart_objects`, `sample_color_at_pixel` |
 | **Layers** (12) | `create_layer`, `create_layer_group`, `move_layer_into_group`, `ungroup_layer`, `convert_to_smart_object`, `delete_layer`, `duplicate_layer`, `rename_layer`, `select_layer_by_path`, `fill_layer`, `merge_visible_layers`, `flatten_image` |
 | **Layer properties** (5) | `set_layer_opacity`, `set_layer_blend_mode`, `set_layer_visibility`, `set_layer_locked`, `rasterize_layer` |
 | **Arrange & transform** (12) | `move_layer`, `scale_layer`, `rotate_layer`, `flip_layer`, `align_layers`, `distribute_layers`, `fit_layer_to_document`, `move_layer_up` / `_down` / `_to_top` / `_to_bottom`, `move_layer_to_position` |

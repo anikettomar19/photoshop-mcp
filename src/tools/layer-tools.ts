@@ -4,7 +4,8 @@ import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { LONG_SCRIPT_TIMEOUT_MS } from '../platform/script-executor.js';
 import { formatLayerTree, LayerTree } from './layer-tree-format.js';
 import { ExtendScriptSnippets } from '../api/extendscript.js';
-import { requireString } from '../utils/args.js';
+import { optionalNumber, requireString } from '../utils/args.js';
+import { jsxEnum } from '../utils/jsx.js';
 
 export function createLayerTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -179,6 +180,54 @@ export function createLayerTools(connection: PhotoshopConnection): ToolDefinitio
         },
       },
       handler: async (args) => createLayerGroup(connection, args),
+    },
+    {
+      tool: {
+        name: 'photoshop_find_layers',
+        description:
+          "Find layers by name, fast even on large documents: returns each match's path (ready " +
+          'for select_layer_by_path, set_layer_visibility and the export tools, with [n] where ' +
+          'siblings share a name), kind, visibility and bounds. name_pattern is a regex, ' +
+          'case-insensitive unless case_sensitive is true. Narrow with under (a group path), ' +
+          'kinds, visible_only and intersects (a region). Use instead of walking the tree in ' +
+          'execute_script.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name_pattern: {
+              type: 'string',
+              description: 'Regex matched against layer names, e.g. "pointer|arrow" or "^Btn"',
+            },
+            case_sensitive: { type: 'boolean', description: 'Default false' },
+            under: { type: 'string', description: 'Only search inside this group path' },
+            kinds: {
+              type: 'array',
+              items: {
+                type: 'string',
+                enum: [...FIND_KINDS],
+              },
+              description: 'Only these kinds (FILL covers shape and fill layers)',
+            },
+            visible_only: {
+              type: 'boolean',
+              description: 'Only layers actually shown (they and every group above are visible)',
+            },
+            intersects: {
+              type: 'object',
+              description: 'Only layers whose bounds overlap this region, in px',
+              properties: {
+                left: { type: 'number' },
+                top: { type: 'number' },
+                right: { type: 'number' },
+                bottom: { type: 'number' },
+              },
+              required: ['left', 'top', 'right', 'bottom'],
+            },
+            limit: { type: 'number', description: 'Max layers returned (default 100, max 1000)' },
+          },
+        },
+      },
+      handler: async (args) => findLayers(connection, args),
     },
   ];
 }
@@ -447,6 +496,86 @@ async function createLayerGroup(
         {
           type: 'text' as const,
           text: `Error creating layer group: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
+  }
+}
+
+export const FIND_KINDS = [
+  'GROUP',
+  'PIXEL',
+  'TEXT',
+  'FILL',
+  'SMARTOBJECT',
+  'ADJUSTMENT',
+  'VIDEO',
+  '3D',
+  'OTHER',
+] as const;
+
+/** Validates find_layers arguments. */
+export function findLayersArgs(args: Record<string, unknown>) {
+  const str = (v: unknown) => (typeof v === 'string' && v !== '' ? v : undefined);
+  const pattern = str(args.name_pattern);
+  const caseSensitive = args.case_sensitive === true;
+  if (pattern !== undefined) {
+    try {
+      new RegExp(pattern, caseSensitive ? '' : 'i');
+    } catch (e) {
+      throw new Error(`name_pattern is not a valid regex: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+  const kindsRaw = args.kinds === undefined ? [] : args.kinds;
+  if (!Array.isArray(kindsRaw)) throw new Error('kinds must be an array');
+  const kinds = kindsRaw.map((k) => jsxEnum(String(k).toUpperCase(), FIND_KINDS, 'kind'));
+  let intersects: { left: number; top: number; right: number; bottom: number } | undefined;
+  if (args.intersects !== undefined) {
+    const r = args.intersects as Record<string, unknown>;
+    const nums = ['left', 'top', 'right', 'bottom'].map((k) => Number(r?.[k]));
+    if (!nums.every(Number.isFinite) || nums[2] <= nums[0] || nums[3] <= nums[1]) {
+      throw new Error('intersects needs numeric left < right and top < bottom');
+    }
+    intersects = { left: nums[0], top: nums[1], right: nums[2], bottom: nums[3] };
+  }
+  const limit = optionalNumber(args, 'limit', 100);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+    throw new Error(`limit must be a whole number from 1 to 1000, got ${limit}`);
+  }
+  return {
+    pattern,
+    caseSensitive,
+    under: str(args.under),
+    kinds,
+    visibleOnly: args.visible_only === true,
+    intersects,
+    limit,
+  };
+}
+
+async function findLayers(
+  connection: PhotoshopConnection,
+  args: Record<string, unknown>
+): Promise<ToolResult> {
+  try {
+    const script = ExtendScriptSnippets.findLayers(findLayersArgs(args));
+    const api = await new PhotoshopAPIFactory(connection).createAPI();
+    const result = await api.executeScript(script, LONG_SCRIPT_TIMEOUT_MS);
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+        },
+      ],
+    };
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error finding layers: ${error instanceof Error ? error.message : String(error)}`,
         },
       ],
       isError: true,
