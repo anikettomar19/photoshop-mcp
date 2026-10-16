@@ -4,7 +4,7 @@ An [MCP](https://modelcontextprotocol.io) server that lets AI assistants (Claude
 
 > Not affiliated with Adobe Inc.
 
-- **109 tools**: documents, layers, shapes, text, effects, filters, selections, exports, and offline PSD reading
+- **Over 100 tools**: documents, layers, shapes, text, effects, filters, selections, exports, and offline PSD reading (the [tool table](#tools) lists them all)
 - **Unity-oriented extras**: RectTransform values from layer bounds, TextMeshPro effect values, a visual sprite search over a Unity project, and a one-call "PSD → Unity assets" export
 - **Built for agents**: forgiving arguments, errors that say what *does* exist, no modal dialogs blocking Photoshop, and outputs sized to fit in a tool result
 
