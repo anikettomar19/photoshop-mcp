@@ -12,8 +12,9 @@ export function createUtilityTools(connection: PhotoshopConnection): ToolDefinit
       tool: {
         name: 'photoshop_get_session_info',
         description:
-          'Get Photoshop session info: all open documents (names, sizes, paths), the active document, ' +
-          'and user preferences (ruler units, type units). Useful to see what files are open before acting.',
+          'Get Photoshop session info: all open documents (names, sizes, paths, whether each has ' +
+          'unsaved changes), the active document and its active layer, and user preferences (ruler ' +
+          'units, type units). Useful to see what files are open before acting.',
         inputSchema: { type: 'object', properties: {} },
       },
       handler: async () => getSessionInfo(connection),
@@ -312,17 +313,31 @@ async function getSessionInfo(connection: PhotoshopConnection): Promise<ToolResu
         var isActive = (doc === app.activeDocument);
         var docPath = '';
         try { docPath = doc.path.fsName; } catch(e) {}
-        result.documents.push({
+        // saved: no unsaved changes. hasFile: the document exists on disk at all
+        // (a new or duplicated document has no file until it is saved).
+        var saved = null;
+        try { saved = doc.saved; } catch(e) {}
+        var entry = {
           name:       doc.name,
           path:       docPath,
+          hasFile:    docPath !== '',
+          saved:      saved,
           width:      Math.round(doc.width.as('px')),
           height:     Math.round(doc.height.as('px')),
           resolution: doc.resolution,
           colorMode:  String(doc.mode),
-          bitDepth:   doc.bitsPerChannel,
+          bitDepth:   String(doc.bitsPerChannel),
           isActive:   isActive
-        });
-        if (isActive) result.activeDocument = doc.name;
+        };
+        if (isActive) {
+          result.activeDocument = doc.name;
+          try {
+            var al = doc.activeLayer, parts = [];
+            for (var n = al; n && n.typename !== 'Document'; n = n.parent) parts.unshift(n.name);
+            result.activeLayer = { name: al.name, path: parts.join('/'), visible: al.visible };
+          } catch(e) {}
+        }
+        result.documents.push(entry);
       }
       return result;
     `);
@@ -424,6 +439,43 @@ async function sampleColorAtPixel(
   }
 }
 
+/**
+ * After a failed export, closes the temp documents it may have left open (only
+ * unsaved documents with exactly these names) and returns to the original
+ * document. Leftovers used to stay open, and the clipped path left its temp
+ * document active, so the next call worked on the wrong document. Best effort:
+ * a cleanup failure must not hide the export error.
+ */
+async function cleanUpExportDocs(
+  api: { executeScript(script: string, timeout?: number): Promise<unknown> },
+  tempNames: string[],
+  origDocName: string | undefined
+): Promise<void> {
+  try {
+    await api.executeScript(`
+      var names = ${JSON.stringify(tempNames)};
+      for (var i = app.documents.length - 1; i >= 0; i--) {
+        var d = app.documents[i];
+        var saved = true;
+        try { d.fullName; } catch (e) { saved = false; }
+        for (var n = 0; n < names.length; n++) {
+          if (d.name === names[n] && !saved) { d.close(SaveOptions.DONOTSAVECHANGES); break; }
+        }
+      }
+      ${
+        origDocName === undefined
+          ? ''
+          : `for (var j = 0; j < app.documents.length; j++) {
+        if (app.documents[j].name === ${jsxString(origDocName)}) { app.activeDocument = app.documents[j]; break; }
+      }`
+      }
+      return 1;
+    `);
+  } catch {
+    // ignore: the export error is what the caller needs to see
+  }
+}
+
 async function exportLayerAsPng(
   connection: PhotoshopConnection,
   args: Record<string, unknown>
@@ -432,16 +484,20 @@ async function exportLayerAsPng(
   const trim = args.trim_transparency !== false;
   const applyClip = args.apply_clipping_mask !== false;
   const layerPath = typeof args.path === 'string' && args.path !== '' ? args.path : undefined;
+  // Temp document names, and the document to return to, for cleanup on failure.
+  const dupDocName = `export_clip_tmp_${process.pid}`;
+  const pasteDocName = `clip_export_${process.pid}`;
+  const simpleDocName = 'layer_export_tmp';
+  let origDocName: string | undefined;
+  const api = await new PhotoshopAPIFactory(connection).createAPI();
   try {
-    const api = await new PhotoshopAPIFactory(connection).createAPI();
-
     // Callers passed a layer path expecting it to be exported; without this the
     // tool silently exported whichever layer happened to be active.
     if (layerPath) {
       await api.executeScript(`
         ${layerPathResolver}
         if (app.documents.length === 0) throw new Error('No active document');
-        app.activeDocument.activeLayer = psResolveLayerPath(app.activeDocument, ${jsxString(layerPath)});
+        psActivate(app.activeDocument, psResolveLayerPath(app.activeDocument, ${jsxString(layerPath)}));
         return 1;
       `);
     }
@@ -459,7 +515,7 @@ async function exportLayerAsPng(
     // Parse from the right — layer names may contain '|', doc name is last.
     const detStr = String(detection);
     const docSep = detStr.lastIndexOf('|');
-    const origDocName = detStr.substring(docSep + 1);
+    origDocName = detStr.substring(docSep + 1);
     const rest = detStr.substring(0, docSep);
     const sepIdx = rest.lastIndexOf('|');
     const layerName = rest.substring(0, sepIdx);
@@ -469,8 +525,6 @@ async function exportLayerAsPng(
     // instead of trusting app.activeDocument, which a user click between the
     // sequential osascript invocations can silently change (the wrong-focus
     // bug: step 4 would then trim/save/CLOSE whatever document had focus).
-    const dupDocName = `export_clip_tmp_${process.pid}`;
-    const pasteDocName = `clip_export_${process.pid}`;
     const docByNameJs = `
       function docByName(n) {
         for (var di = 0; di < app.documents.length; di++)
@@ -617,11 +671,14 @@ async function exportLayerAsPng(
 
         var newDoc = app.documents.add(
           origDoc.width, origDoc.height, origDoc.resolution,
-          'layer_export_tmp', NewDocumentMode.RGB, DocumentFill.TRANSPARENT
+          ${jsxString(simpleDocName)}, NewDocumentMode.RGB, DocumentFill.TRANSPARENT
         );
         app.activeDocument = origDoc;
         srcLayer.duplicate(newDoc, ElementPlacement.PLACEATBEGINNING);
         app.activeDocument = newDoc;
+        // A hidden layer is exported as it looks when shown; only the copy is
+        // made visible, so the original document is left as it was.
+        newDoc.activeLayer.visible = true;
 
         // Smart Objects may export blank after duplicate — rasterize to materialize pixels
         try {
@@ -657,6 +714,7 @@ async function exportLayerAsPng(
       return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
     }
   } catch (error) {
+    await cleanUpExportDocs(api, [dupDocName, pasteDocName, simpleDocName], origDocName);
     return {
       content: [
         {

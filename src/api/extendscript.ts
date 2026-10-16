@@ -206,6 +206,35 @@ function psResolveLayerPath(doc, path) {
 
   return layer;
 }
+
+// Making a hidden layer active through the DOM (doc.activeLayer = layer) also
+// makes it, and any hidden group above it, visible. Selecting is not meant to
+// change what the document shows, so the visibility of the layer and its
+// ancestors is put back afterwards.
+function psActivate(doc, layer) {
+  var chain = [];
+  for (var n = layer; n && n.typename !== 'Document'; n = n.parent) {
+    chain.push({ node: n, visible: n.visible });
+  }
+  doc.activeLayer = layer;
+  for (var c = 0; c < chain.length; c++) {
+    if (chain[c].node.visible !== chain[c].visible) chain[c].node.visible = chain[c].visible;
+  }
+  return layer;
+}
+
+// Renaming through the DOM selects the layer first, with the same side effect.
+function psRename(layer, name) {
+  var chain = [];
+  for (var n = layer; n && n.typename !== 'Document'; n = n.parent) {
+    chain.push({ node: n, visible: n.visible });
+  }
+  layer.name = name;
+  for (var c = 0; c < chain.length; c++) {
+    if (chain[c].node.visible !== chain[c].visible) chain[c].node.visible = chain[c].visible;
+  }
+  return layer;
+}
 `;
 
 /**
@@ -585,7 +614,10 @@ export const ExtendScriptSnippets = {
     var doc = app.activeDocument;
     for (var i = 0; i < doc.layers.length; i++) {
       if (doc.layers[i].name === ${jsxString(name)}) {
+        // Selecting through the DOM shows a hidden layer; keep it as it was.
+        var wasVisible = doc.layers[i].visible;
         doc.activeLayer = doc.layers[i];
+        if (doc.layers[i].visible !== wasVisible) doc.layers[i].visible = wasVisible;
         return { selected: true, name: doc.layers[i].name };
       }
     }
@@ -814,19 +846,21 @@ export const ExtendScriptSnippets = {
   /**
    * Rename active layer
    */
-  renameLayer: (newName: string) => `
+  renameLayer: (newName: string, layerPath?: string) => `
+    ${layerPathResolver}
     if (app.documents.length === 0) {
       throw new Error('No active document');
     }
     var doc = app.activeDocument;
-    var layer = doc.activeLayer;
-    
+    var layer = ${layerPath === undefined ? 'doc.activeLayer' : `psResolveLayerPath(doc, ${jsxString(layerPath)})`};
+
     var oldName = layer.name;
-    layer.name = ${jsxString(newName)};
-    
-    return { 
+    psRename(layer, ${jsxString(newName)});
+
+    return {
       oldName: oldName,
-      newName: layer.name
+      newName: layer.name,
+      visible: layer.visible
     };
   `,
 
@@ -1945,9 +1979,10 @@ export const ExtendScriptSnippets = {
     var doc = app.activeDocument;
     var layer = psResolveLayerPath(doc, ${jsxString(path)});
 
-    doc.activeLayer = layer;
+    psActivate(doc, layer);
     return {
       selected: true,
+      visible: layer.visible,
       name: layer.name,
       type: layer.typename === "LayerSet" ? "GROUP" : String(layer.kind),
       path: ${jsxString(path)}
