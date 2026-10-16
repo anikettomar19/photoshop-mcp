@@ -3,6 +3,7 @@ import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { jsxEnum, jsxString } from '../utils/jsx.js';
 import { optionalNumber } from '../utils/args.js';
+import { BLEND_MODES } from '../api/extendscript.js';
 
 export function createLayerEffectsTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -193,6 +194,7 @@ export function createLayerEffectsTools(connection: PhotoshopConnection): ToolDe
       },
       handler: async () => removeLayerEffects(connection),
     },
+    ...effectTools(connection),
   ];
 }
 
@@ -664,4 +666,372 @@ async function removeLayerEffects(connection: PhotoshopConnection): Promise<Tool
       isError: true,
     };
   }
+}
+
+// ─── colour overlay, inner shadow, glows, bevel, satin ───────────────────────
+//
+// Each effect is a spec: its Photoshop key, its arguments, and the descriptor
+// fields those arguments fill. One builder writes all of them through
+// setLayerEffectScript, so every effect replaces itself and keeps the others.
+
+/** BLEND_MODES name → the stringID an effect's 'Md  ' enum takes. */
+const EFFECT_BLEND_IDS: Record<(typeof BLEND_MODES)[number], string> = {
+  NORMAL: 'normal',
+  DISSOLVE: 'dissolve',
+  DARKEN: 'darken',
+  MULTIPLY: 'multiply',
+  COLORBURN: 'colorBurn',
+  LINEARBURN: 'linearBurn',
+  DARKERCOLOR: 'darkerColor',
+  LIGHTEN: 'lighten',
+  SCREEN: 'screen',
+  COLORDODGE: 'colorDodge',
+  LINEARDODGE: 'linearDodge',
+  LIGHTERCOLOR: 'lighterColor',
+  OVERLAY: 'overlay',
+  SOFTLIGHT: 'softLight',
+  HARDLIGHT: 'hardLight',
+  VIVIDLIGHT: 'vividLight',
+  LINEARLIGHT: 'linearLight',
+  PINLIGHT: 'pinLight',
+  HARDMIX: 'hardMix',
+  DIFFERENCE: 'difference',
+  EXCLUSION: 'exclusion',
+  SUBTRACT: 'blendSubtraction',
+  DIVIDE: 'blendDivide',
+  HUE: 'hue',
+  SATURATION: 'saturation',
+  COLOR: 'color',
+  LUMINOSITY: 'luminosity',
+};
+
+const GLOW_TECHNIQUES = ['SOFTER', 'PRECISE'] as const;
+const GLOW_SOURCES = ['EDGE', 'CENTER'] as const;
+const BEVEL_STYLES = ['INNER_BEVEL', 'OUTER_BEVEL', 'EMBOSS', 'PILLOW_EMBOSS'] as const;
+const BEVEL_TECHNIQUES = ['SMOOTH', 'CHISEL_HARD', 'CHISEL_SOFT'] as const;
+const BEVEL_DIRECTIONS = ['UP', 'DOWN'] as const;
+
+type Num = { kind: 'number'; default: number; min?: number; max?: number; description: string };
+type Str = { kind: 'enum'; default: string; values: readonly string[]; description: string };
+type Hex = { kind: 'color'; default: string; description: string };
+type Bool = { kind: 'boolean'; default: boolean; description: string };
+type Param = Num | Str | Hex | Bool;
+type Rgb = { r: number; g: number; b: number };
+type EffectValue = number | string | boolean | Rgb;
+type EffectValues = Record<string, EffectValue>;
+
+interface EffectSpec {
+  tool: string;
+  key: string;
+  multiKey: string;
+  label: string;
+  description: string;
+  params: Record<string, Param>;
+  /** Descriptor-filling statements; values are already validated. */
+  body: (v: EffectValues) => string;
+}
+
+const num = (d: number, description: string, min?: number, max?: number): Num => ({
+  kind: 'number',
+  default: d,
+  min,
+  max,
+  description,
+});
+const pct = (d: number, what = 'Opacity') => num(d, `${what} % (0-100, default ${d})`, 0, 100);
+const px = (d: number, what: string, max = 250) =>
+  num(d, `${what} in pixels (0-${max}, default ${d})`, 0, max);
+const hex = (d: string, what: string): Hex => ({
+  kind: 'color',
+  default: d,
+  description: `${what} as hex (default ${d})`,
+});
+const blend = (d: (typeof BLEND_MODES)[number]): Str => ({
+  kind: 'enum',
+  default: d,
+  values: BLEND_MODES,
+  description: `Blend mode (default ${d})`,
+});
+const choice = (values: readonly string[], d: string, description: string): Str => ({
+  kind: 'enum',
+  default: d,
+  values,
+  description: `${description} (default ${d})`,
+});
+
+const jsxColor = (value: EffectValue, c = value as Rgb) => `rgbDesc(${c.r}, ${c.g}, ${c.b})`;
+const jsxBlend = (key: string, mode: EffectValue) =>
+  `effect.putEnumerated(cTID('${key}'), cTID('BlnM'), sTID('${EFFECT_BLEND_IDS[String(mode) as keyof typeof EFFECT_BLEND_IDS]}'));`;
+
+export const EFFECT_SPECS: EffectSpec[] = [
+  {
+    tool: 'photoshop_add_color_overlay',
+    key: 'solidFill',
+    multiKey: 'solidFillMulti',
+    label: 'colorOverlay',
+    description:
+      'Add or replace the Color Overlay effect on the active layer: recolours it without ' +
+      'touching its pixels or vector fill.',
+    params: {
+      color: hex('#FFFFFF', 'Overlay colour'),
+      opacity: pct(100),
+      blend_mode: blend('NORMAL'),
+    },
+    body: (v) => `
+      ${jsxBlend('Md  ', v.blend_mode)}
+      effect.putObject(cTID('Clr '), cTID('RGBC'), ${jsxColor(v.color)});
+      effect.putUnitDouble(cTID('Opct'), cTID('#Prc'), ${v.opacity});`,
+  },
+  {
+    tool: 'photoshop_add_inner_shadow',
+    key: 'innerShadow',
+    multiKey: 'innerShadowMulti',
+    label: 'innerShadow',
+    description:
+      'Add or replace the Inner Shadow effect on the active layer (pressed buttons, inset panels).',
+    params: {
+      color: hex('#000000', 'Shadow colour'),
+      opacity: pct(75),
+      blend_mode: blend('MULTIPLY'),
+      angle: num(120, 'Light angle in degrees (default 120)', -360, 360),
+      distance: px(5, 'Distance', 30000),
+      choke: pct(0, 'Choke'),
+      size: px(5, 'Size (softness)'),
+    },
+    body: (v) => `
+      ${jsxBlend('Md  ', v.blend_mode)}
+      effect.putObject(cTID('Clr '), cTID('RGBC'), ${jsxColor(v.color)});
+      effect.putUnitDouble(cTID('Opct'), cTID('#Prc'), ${v.opacity});
+      effect.putBoolean(cTID('uglg'), false);
+      effect.putUnitDouble(cTID('lagl'), cTID('#Ang'), ${v.angle});
+      effect.putUnitDouble(cTID('Dstn'), cTID('#Pxl'), ${v.distance});
+      effect.putUnitDouble(cTID('Ckmt'), cTID('#Prc'), ${v.choke});
+      effect.putUnitDouble(cTID('blur'), cTID('#Pxl'), ${v.size});`,
+  },
+  {
+    tool: 'photoshop_add_outer_glow',
+    key: 'outerGlow',
+    multiKey: 'outerGlowMulti',
+    label: 'outerGlow',
+    description: 'Add or replace the Outer Glow effect on the active layer.',
+    params: {
+      color: hex('#FFFFBE', 'Glow colour'),
+      opacity: pct(75),
+      blend_mode: blend('SCREEN'),
+      spread: pct(0, 'Spread'),
+      size: px(10, 'Size'),
+      technique: choice(GLOW_TECHNIQUES, 'SOFTER', 'Glow technique'),
+    },
+    body: (v) => `
+      ${jsxBlend('Md  ', v.blend_mode)}
+      effect.putObject(cTID('Clr '), cTID('RGBC'), ${jsxColor(v.color)});
+      effect.putUnitDouble(cTID('Opct'), cTID('#Prc'), ${v.opacity});
+      effect.putEnumerated(cTID('GlwT'), cTID('BETE'), cTID('${v.technique === 'PRECISE' ? 'PrBL' : 'SfBL'}'));
+      effect.putUnitDouble(cTID('Ckmt'), cTID('#Prc'), ${v.spread});
+      effect.putUnitDouble(cTID('blur'), cTID('#Pxl'), ${v.size});
+      effect.putUnitDouble(cTID('Nose'), cTID('#Prc'), 0);
+      effect.putUnitDouble(cTID('ShdN'), cTID('#Prc'), 0);
+      effect.putBoolean(cTID('AntA'), false);
+      effect.putUnitDouble(cTID('Inpr'), cTID('#Prc'), 50);`,
+  },
+  {
+    tool: 'photoshop_add_inner_glow',
+    key: 'innerGlow',
+    multiKey: 'innerGlowMulti',
+    label: 'innerGlow',
+    description: 'Add or replace the Inner Glow effect on the active layer.',
+    params: {
+      color: hex('#FFFFBE', 'Glow colour'),
+      opacity: pct(75),
+      blend_mode: blend('SCREEN'),
+      source: choice(GLOW_SOURCES, 'EDGE', 'Glow from the edge or the centre'),
+      choke: pct(0, 'Choke'),
+      size: px(10, 'Size'),
+      technique: choice(GLOW_TECHNIQUES, 'SOFTER', 'Glow technique'),
+    },
+    body: (v) => `
+      ${jsxBlend('Md  ', v.blend_mode)}
+      effect.putObject(cTID('Clr '), cTID('RGBC'), ${jsxColor(v.color)});
+      effect.putUnitDouble(cTID('Opct'), cTID('#Prc'), ${v.opacity});
+      effect.putEnumerated(cTID('GlwT'), cTID('BETE'), cTID('${v.technique === 'PRECISE' ? 'PrBL' : 'SfBL'}'));
+      effect.putEnumerated(cTID('glwS'), cTID('IGSr'), cTID('${v.source === 'CENTER' ? 'SrcC' : 'SrcE'}'));
+      effect.putUnitDouble(cTID('Ckmt'), cTID('#Prc'), ${v.choke});
+      effect.putUnitDouble(cTID('blur'), cTID('#Pxl'), ${v.size});
+      effect.putUnitDouble(cTID('Nose'), cTID('#Prc'), 0);
+      effect.putUnitDouble(cTID('ShdN'), cTID('#Prc'), 0);
+      effect.putBoolean(cTID('AntA'), false);
+      effect.putUnitDouble(cTID('Inpr'), cTID('#Prc'), 50);`,
+  },
+  {
+    tool: 'photoshop_add_bevel_emboss',
+    key: 'bevelEmboss',
+    multiKey: 'bevelEmbossMulti',
+    label: 'bevelEmboss',
+    description: 'Add or replace the Bevel & Emboss effect on the active layer.',
+    params: {
+      style: choice(BEVEL_STYLES, 'INNER_BEVEL', 'Bevel style'),
+      technique: choice(BEVEL_TECHNIQUES, 'SMOOTH', 'Technique'),
+      depth: num(100, 'Depth % (1-1000, default 100)', 1, 1000),
+      direction: choice(BEVEL_DIRECTIONS, 'UP', 'Direction'),
+      size: px(5, 'Size'),
+      soften: px(0, 'Soften', 16),
+      angle: num(120, 'Light angle in degrees (default 120)', -360, 360),
+      altitude: num(30, 'Light altitude in degrees (0-90, default 30)', 0, 90),
+      highlight_color: hex('#FFFFFF', 'Highlight colour'),
+      highlight_opacity: pct(75, 'Highlight opacity'),
+      shadow_color: hex('#000000', 'Shadow colour'),
+      shadow_opacity: pct(75, 'Shadow opacity'),
+    },
+    body: (v) => {
+      const style = {
+        INNER_BEVEL: 'InrB',
+        OUTER_BEVEL: 'OtrB',
+        EMBOSS: 'Embs',
+        PILLOW_EMBOSS: 'PlEb',
+      }[v.style as (typeof BEVEL_STYLES)[number]];
+      const technique = { SMOOTH: 'SfBL', CHISEL_HARD: 'PrBL', CHISEL_SOFT: 'Slmt' }[
+        v.technique as (typeof BEVEL_TECHNIQUES)[number]
+      ];
+      return `
+      effect.putEnumerated(cTID('bvlS'), cTID('BESl'), cTID('${style}'));
+      effect.putEnumerated(cTID('bvlT'), cTID('bvlT'), cTID('${technique}'));
+      effect.putUnitDouble(cTID('srgR'), cTID('#Prc'), ${v.depth});
+      effect.putEnumerated(cTID('bvlD'), cTID('BESs'), cTID('${v.direction === 'DOWN' ? 'Out ' : 'In  '}'));
+      effect.putUnitDouble(cTID('blur'), cTID('#Pxl'), ${v.size});
+      effect.putUnitDouble(cTID('Sftn'), cTID('#Pxl'), ${v.soften});
+      effect.putBoolean(cTID('uglg'), false);
+      effect.putUnitDouble(cTID('lagl'), cTID('#Ang'), ${v.angle});
+      effect.putUnitDouble(cTID('Lald'), cTID('#Ang'), ${v.altitude});
+      effect.putEnumerated(cTID('hglM'), cTID('BlnM'), cTID('Scrn'));
+      effect.putObject(cTID('hglC'), cTID('RGBC'), ${jsxColor(v.highlight_color)});
+      effect.putUnitDouble(cTID('hglO'), cTID('#Prc'), ${v.highlight_opacity});
+      effect.putEnumerated(cTID('sdwM'), cTID('BlnM'), cTID('Mltp'));
+      effect.putObject(cTID('sdwC'), cTID('RGBC'), ${jsxColor(v.shadow_color)});
+      effect.putUnitDouble(cTID('sdwO'), cTID('#Prc'), ${v.shadow_opacity});
+      effect.putBoolean(sTID('useShape'), false);
+      effect.putBoolean(sTID('useTexture'), false);`;
+    },
+  },
+  {
+    tool: 'photoshop_add_satin',
+    key: 'chromeFX',
+    multiKey: 'chromeFXMulti',
+    label: 'satin',
+    description: 'Add or replace the Satin effect on the active layer (soft inner sheen).',
+    params: {
+      color: hex('#000000', 'Satin colour'),
+      opacity: pct(50),
+      blend_mode: blend('MULTIPLY'),
+      angle: num(19, 'Angle in degrees (default 19)', -360, 360),
+      distance: px(11, 'Distance'),
+      size: px(14, 'Size'),
+      invert: { kind: 'boolean', default: true, description: 'Invert (default true)' },
+    },
+    body: (v) => `
+      ${jsxBlend('Md  ', v.blend_mode)}
+      effect.putObject(cTID('Clr '), cTID('RGBC'), ${jsxColor(v.color)});
+      effect.putUnitDouble(cTID('Opct'), cTID('#Prc'), ${v.opacity});
+      effect.putUnitDouble(cTID('lagl'), cTID('#Ang'), ${v.angle});
+      effect.putUnitDouble(cTID('Dstn'), cTID('#Pxl'), ${v.distance});
+      effect.putUnitDouble(cTID('blur'), cTID('#Pxl'), ${v.size});
+      effect.putBoolean(cTID('Invr'), ${v.invert});
+      effect.putBoolean(cTID('AntA'), true);`,
+  },
+];
+
+/** JSON-schema for one spec's arguments. */
+function effectSchema(spec: EffectSpec) {
+  const properties: Record<string, Record<string, unknown>> = {};
+  for (const [name, p] of Object.entries(spec.params)) {
+    if (p.kind === 'number') {
+      properties[name] = { type: 'number', description: p.description, default: p.default };
+      if (p.min !== undefined) properties[name].minimum = p.min;
+      if (p.max !== undefined) properties[name].maximum = p.max;
+    } else if (p.kind === 'enum') {
+      properties[name] = {
+        type: 'string',
+        enum: [...p.values],
+        description: p.description,
+        default: p.default,
+      };
+    } else if (p.kind === 'color') {
+      properties[name] = { type: 'string', description: p.description, default: p.default };
+    } else {
+      properties[name] = { type: 'boolean', description: p.description, default: p.default };
+    }
+  }
+  return { type: 'object' as const, properties };
+}
+
+/** Validates arguments against a spec, filling defaults; throws on bad values. */
+export function effectValues(spec: EffectSpec, args: Record<string, unknown>): EffectValues {
+  const out: EffectValues = {};
+  for (const [name, p] of Object.entries(spec.params)) {
+    const raw = args[name];
+    if (p.kind === 'number') {
+      const n = optionalNumber(args, name, p.default);
+      if ((p.min !== undefined && n < p.min) || (p.max !== undefined && n > p.max)) {
+        throw new Error(`${name} must be between ${p.min} and ${p.max}, got ${n}`);
+      }
+      out[name] = n;
+    } else if (p.kind === 'enum') {
+      out[name] = jsxEnum(String(raw ?? p.default).toUpperCase(), p.values, name.replace('_', ' '));
+    } else if (p.kind === 'color') {
+      out[name] = parseHexColor(String(raw ?? p.default));
+    } else {
+      out[name] = raw === undefined ? p.default : raw === true;
+    }
+  }
+  return out;
+}
+
+export function effectScript(spec: EffectSpec, v: EffectValues): string {
+  const summary: Record<string, unknown> = { applied: true, effect: spec.label };
+  for (const [k, val] of Object.entries(v)) summary[k] = val;
+  return `
+      ${amHelpers}
+      if (app.documents.length === 0) throw new Error('No active document');
+      function rgbDesc(r, g, b) {
+        var c = new ActionDescriptor();
+        c.putDouble(cTID('Rd  '), r); c.putDouble(cTID('Grn '), g); c.putDouble(cTID('Bl  '), b);
+        return c;
+      }
+      var effect = new ActionDescriptor();
+      effect.putBoolean(sTID('enabled'), true);
+      effect.putBoolean(sTID('present'), true);
+      effect.putBoolean(sTID('showInDialog'), true);
+      ${spec.body(v)}
+      ${setLayerEffectScript(spec.key, spec.multiKey)}
+      var summary = ${JSON.stringify(summary)};
+      summary.layerName = app.activeDocument.activeLayer.name;
+      return summary;
+  `;
+}
+
+function effectTools(connection: PhotoshopConnection): ToolDefinition[] {
+  return EFFECT_SPECS.map((spec) => ({
+    tool: {
+      name: spec.tool,
+      description: spec.description + ' Colours are hex. Does not rasterize the layer.',
+      inputSchema: effectSchema(spec),
+    },
+    handler: async (args: Record<string, unknown>) => {
+      try {
+        const script = effectScript(spec, effectValues(spec, args));
+        const api = await new PhotoshopAPIFactory(connection).createAPI();
+        const result = await api.executeScript(script);
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  }));
 }

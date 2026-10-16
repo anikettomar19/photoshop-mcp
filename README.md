@@ -68,11 +68,11 @@ The first launch clones and builds the server, so it takes a little longer. **Af
 | **Documents** (6) | `create_document`, `open_image`, `save_document`, `close_document`, `duplicate_document`, `set_active_document` |
 | **Inspect** (9) | `get_layer_tree`, `find_layers`, `get_layers`, `get_document_info`, `get_session_info`, `get_selection_info`, `get_layer_effects`, `list_smart_objects`, `sample_color_at_pixel` |
 | **Layers** (12) | `create_layer`, `create_layer_group`, `move_layer_into_group`, `ungroup_layer`, `convert_to_smart_object`, `delete_layer`, `duplicate_layer`, `rename_layer`, `select_layer_by_path`, `fill_layer`, `merge_visible_layers`, `flatten_image` |
-| **Layer properties** (5) | `set_layer_opacity`, `set_layer_blend_mode`, `set_layer_visibility`, `set_layer_locked`, `rasterize_layer` |
+| **Layer properties** (6) | `set_layer_opacity`, `set_fill_opacity`, `set_layer_blend_mode`, `set_layer_visibility`, `set_layer_locked`, `rasterize_layer` |
 | **Arrange & transform** (12) | `move_layer`, `scale_layer`, `rotate_layer`, `flip_layer`, `align_layers`, `distribute_layers`, `fit_layer_to_document`, `move_layer_up` / `_down` / `_to_top` / `_to_bottom`, `move_layer_to_position` |
 | **Text** (5) | `create_text_layer`, `update_text_content`, `set_text_font`, `set_text_color`, `set_text_alignment` |
 | **Shapes** (3) | `create_shape` (rectangle, rounded rectangle, ellipse), `set_shape_fill`, `set_shape_stroke` |
-| **Layer effects** (4) | `add_drop_shadow`, `add_stroke_effect`, `add_gradient_overlay`, `remove_layer_effects` |
+| **Layer effects** (10) | `add_drop_shadow`, `add_stroke_effect`, `add_gradient_overlay`, `add_color_overlay`, `add_inner_shadow`, `add_outer_glow`, `add_inner_glow`, `add_bevel_emboss`, `add_satin`, `remove_layer_effects` |
 | **Image & canvas** (4) | `resize_image`, `resize_canvas`, `crop_document`, `trim_document` |
 | **Adjustments** (7) | `adjust_brightness_contrast`, `adjust_hue_saturation`, `apply_levels`, `auto_levels`, `auto_contrast`, `desaturate`, `invert` |
 | **Filters** (4) | `apply_gaussian_blur`, `apply_sharpen`, `apply_noise`, `apply_motion_blur` |
