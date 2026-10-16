@@ -18,6 +18,8 @@ export class PhotoshopConnection {
   private executor: ScriptExecutor;
   private photoshopInfo: PhotoshopInfo | null = null;
   private macosExecutor?: MacOSExecutor;
+  /** Set on platforms where Photoshop can't run; Photoshop tools fail with it. */
+  unsupportedReason?: string;
 
   constructor() {
     this.logger = new Logger('PhotoshopConnection');
@@ -31,7 +33,21 @@ export class PhotoshopConnection {
       this.macosExecutor = new MacOSExecutor();
       this.executor = this.macosExecutor;
     } else {
-      throw new Error(`Unsupported platform: ${platformType}`);
+      // Photoshop only runs on macOS and Windows, but the server still starts
+      // here: the PSD-file, sprite and issue tools need no Photoshop, and
+      // tools/list works (CI checks the README against it on Linux). Only
+      // Photoshop calls fail, with a clear reason.
+      this.unsupportedReason =
+        `Photoshop automation needs macOS or Windows; this is ${platformType}. ` +
+        'Tools that read PSD files, search sprites or draft issues still work.';
+      const unsupported = (): never => {
+        throw new Error(this.unsupportedReason);
+      };
+      this.executor = {
+        execute: async () => unsupported(),
+        isPhotoshopRunning: async () => false,
+        launchPhotoshop: async () => unsupported(),
+      };
     }
   }
 

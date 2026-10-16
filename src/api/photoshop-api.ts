@@ -31,7 +31,10 @@ export class PhotoshopAPIFactory {
     const info = this.connection.getPhotoshopInfo();
 
     if (!info) {
-      throw new Error('Photoshop info not available. Please detect Photoshop first.');
+      throw new Error(
+        this.connection.unsupportedReason ??
+          'Photoshop info not available. Please detect Photoshop first.'
+      );
     }
 
     // Determine which API to use based on version
