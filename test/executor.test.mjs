@@ -44,3 +44,19 @@ test('SerialQueue runs one task at a time, in order, past failures', async () =>
 test('timeoutError says how long it waited', () => {
   assert.match(timeoutError(45_000).message, /after 45s/);
 });
+
+test('a quoted ERROR string is still an error', () => {
+  // Seen on macOS 15.1: osascript printed the result as "ERROR: No active document".
+  assert.throws(() => parseScriptOutput('"ERROR: No active document"\n'), {
+    message: 'No active document',
+  });
+  assert.throws(() => parseScriptOutput('  "ERROR: Layer not found at path segment: \\"x\\""  '), {
+    message: 'Layer not found at path segment: "x"',
+  });
+});
+
+test('quoted results that are not errors stay results', () => {
+  assert.equal(parseScriptOutput('"hello"'), 'hello');
+  assert.equal(parseScriptOutput('"An ERROR: happened earlier"'), 'An ERROR: happened earlier');
+  assert.equal(parseScriptOutput('"({selected:true})"'), '({selected:true})');
+});

@@ -84,7 +84,7 @@ test('a tool request uses the tool-request form', () => {
   const q = new URL(issueUrl(d).url).searchParams;
   assert.equal(q.get('template'), 'tool_request.yml');
   assert.equal(q.get('need'), 'need');
-  assert.match(q.get('workaround'), /script\nTool used instead: photoshop_execute_script/);
+  assert.match(q.get('workaround'), /script\nRelated tool: photoshop_execute_script/);
 });
 
 test('long reports keep the URL under the limit and say so', () => {
