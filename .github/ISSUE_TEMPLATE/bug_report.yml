@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Agents can draft this for you with the `photoshop_report_issue` tool, which fills in versions and recent failed calls.
+        Agents can draft this for you with the `photoshop_draft_issue` tool, which fills in versions and recent failed calls.
         Check the text for private file, layer or project names before submitting.
   - type: input
     id: tool
