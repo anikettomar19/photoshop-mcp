@@ -1,13 +1,6 @@
 import { parentPort, workerData } from 'worker_threads';
 import { Jimp } from 'jimp';
-import {
-  computePhash,
-  computeHsvHistogram,
-  computeAlphaHash,
-  computeContentHash,
-  computeNineSliceGeom,
-  readSpriteBorder,
-} from './sprite-hash.js';
+import { computeSpriteHashes, computeNineSliceGeom, readSpriteBorder } from './sprite-hash.js';
 
 // ---------------------------------------------------------------------------
 // worker_threads entry for parallel sprite-index builds.
@@ -34,20 +27,11 @@ const errors: Array<{ path: string; error: string }> = [];
 for (const job of jobs) {
   try {
     const img = await Jimp.read(job.absPath);
-    const { width, height } = img.bitmap;
-    const entry: Record<string, unknown> = {
-      mtime: job.mtime,
-      width,
-      height,
-      aspectRatio: width / (height || 1),
-      phash: computePhash(img),
-      hsvHist: computeHsvHistogram(img),
-      alphaHash: computeAlphaHash(img),
-      contentHash: computeContentHash(img),
-    };
+    const entry: Record<string, unknown> = { mtime: job.mtime, ...computeSpriteHashes(img) };
     const border = readSpriteBorder(job.absPath);
     if (border) {
       entry.spriteBorder = border;
+      // Geometry reads the untrimmed file: corner radius is measured from its edge.
       const geom = computeNineSliceGeom(img);
       entry.corner_radius = geom.corner_radius;
       entry.dominant_color = geom.dominant_color;
