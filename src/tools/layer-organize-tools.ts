@@ -265,7 +265,7 @@ export function scriptMoveIntoGroup(
     if (${position === 'BOTTOM'} || target.layers.length === 0) {
       placeholder = target.artLayers.add();
       placeholder.move(target, ElementPlacement.PLACEATEND);
-      doc.activeLayer = layer;
+      psActivate(doc, layer);
     }
     layer.move(placeholder || target.layers[0], ElementPlacement.PLACEBEFORE);
     if (placeholder) placeholder.remove();`
@@ -282,7 +282,7 @@ export function scriptUngroup(group: string | undefined): string {
     var names = [];
     for (var i = 0; i < g.layers.length; i++) names.push(g.layers[i].name);
     var name = g.name;
-    doc.activeLayer = g;
+    psActivate(doc, g);
     var ref = new ActionReference();
     ref.putEnumerated(cTID('Lyr '), cTID('Ordn'), cTID('Trgt'));
     var d = new ActionDescriptor();
@@ -301,9 +301,17 @@ export function scriptFlipLayer(
     ${helpers}
     var layer = pick(${pathLiteral(layerPath)});
     if (layer.isBackgroundLayer) throw new Error('The Background layer cannot be flipped; flip the canvas or convert it to a normal layer.');
-    doc.activeLayer = layer;
-    layer.resize(${sx}, ${sy}, AnchorPosition.MIDDLECENTER);
-    return { flipped: ${jsxString(direction)}, layerName: layer.name };
+    psActivate(doc, layer);
+    // Photoshop refuses to transform a hidden layer, so it is shown for the
+    // flip and hidden again afterwards.
+    var wasVisible = layer.visible;
+    if (!wasVisible) layer.visible = true;
+    try {
+      layer.resize(${sx}, ${sy}, AnchorPosition.MIDDLECENTER);
+    } finally {
+      if (!wasVisible) layer.visible = false;
+    }
+    return { flipped: ${jsxString(direction)}, layerName: layer.name, visible: layer.visible };
   `;
 }
 
@@ -387,10 +395,12 @@ export function scriptConvertToSmartObject(layerPath: string | undefined): strin
     if (layer.typename !== 'LayerSet' && layer.kind === LayerKind.SMARTOBJECT) {
       throw new Error('Layer "' + layer.name + '" is already a smart object.');
     }
-    doc.activeLayer = layer;
+    var wasVisible = layer.visible;
+    psActivate(doc, layer);
     executeAction(sTID('newPlacedLayer'), undefined, DialogModes.NO);
     var so = doc.activeLayer;
-    return { converted: true, layerName: so.name, kind: String(so.kind), path: fullPath(so) };
+    if (so.visible !== wasVisible) so.visible = wasVisible;
+    return { converted: true, layerName: so.name, kind: String(so.kind), path: fullPath(so), visible: so.visible };
   `;
 }
 
