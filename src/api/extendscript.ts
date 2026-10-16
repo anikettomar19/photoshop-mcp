@@ -1397,19 +1397,27 @@ export const ExtendScriptSnippets = {
    * Execute custom JavaScript code
    */
   executeCustomScript: (code: string) => {
-    // Auto-add return to the last expression if user didn't include one
-    const trimmed = code.trim();
-    const lines = trimmed.split('\n');
-    const lastLine = lines[lines.length - 1].trim();
-
-    // Add return if last line is an expression (not a statement like if/for/var/return/}/;)
-    const isStatement =
-      /^(if|for|while|var|let|const|return|throw|try|catch|function|\/\/|\}|;$)/.test(lastLine);
-    if (!isStatement && !lastLine.startsWith('return ')) {
-      lines[lines.length - 1] = 'return ' + lines[lines.length - 1];
+    // The script's value is the completion value of its last statement, as in
+    // a console: eval returns exactly that. Prefixing the last line with
+    // "return" (the old approach) broke whenever that line held more than one
+    // statement: "var r = f(); r" returned undefined and "doc.close(); 'ok'"
+    // returned close()'s value. A script written as a function body with a
+    // top-level return is a syntax error under eval, which runs nothing, so it
+    // is then run as a function body. A bare object literal "{a: 1}" would
+    // parse as a block, so that shape is tried as an expression first.
+    return `
+    var __src = ${jsxString(code)};
+    var __trim = __src.replace(/^\\s+|\\s+$/g, '');
+    if (__trim.charAt(0) === '{' && __trim.charAt(__trim.length - 1) === '}') {
+      try { return eval('(' + __src + ')'); } catch (__e0) { if (!(__e0 instanceof SyntaxError)) throw __e0; }
     }
-
-    return lines.join('\n');
+    try {
+      return eval(__src);
+    } catch (__e) {
+      if (__e instanceof SyntaxError && /\\breturn\\b/.test(__src)) return (new Function(__src))();
+      throw __e;
+    }
+  `;
   },
 
   /**

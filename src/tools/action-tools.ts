@@ -33,8 +33,10 @@ export function createActionTools(connection: PhotoshopConnection): ToolDefiniti
       tool: {
         name: 'photoshop_execute_script',
         description:
-          'Execute custom ExtendScript code (advanced). Runs with a 30s limit by default; ' +
-          'pass timeout_seconds for long work such as walking or exporting a large document.',
+          'Execute custom ExtendScript code (advanced). The result is the value of the last ' +
+          'statement, as in a console ("var r = f(); r" returns r); a top-level return also works. ' +
+          'Prefer a dedicated tool when one exists. Runs with a 30s limit by default; pass ' +
+          'timeout_seconds for long work such as walking or exporting a large document.',
         inputSchema: {
           type: 'object',
           properties: {
