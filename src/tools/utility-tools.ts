@@ -49,6 +49,73 @@ export function createUtilityTools(connection: PhotoshopConnection): ToolDefinit
     },
     {
       tool: {
+        name: 'photoshop_export_composite',
+        description:
+          'Export what the document shows (or a chosen part of it) as one PNG, keeping ' +
+          'transparency, without changing the document: the work happens on a temporary ' +
+          'duplicate. only_layers keeps just those layers or groups (and the groups they are in); ' +
+          'hide_layers hides some; region crops to an area. Then optional trim, max_width / ' +
+          'max_height (fit inside, keeping proportions), scale, canvas_width / canvas_height ' +
+          '(centre on an exact canvas), padding and background. Use instead of duplicating, ' +
+          'flattening and saving by hand: flatten() puts transparent art on white.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            output_path: { type: 'string', description: 'Absolute output path for the PNG' },
+            only_layers: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                'Layer or group paths to keep; everything else is hidden (a kept group shows ' +
+                'its contents as they are). The Background layer is hidden unless listed.',
+            },
+            hide_layers: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Layer or group paths to hide',
+            },
+            region: {
+              type: 'object',
+              description: 'Crop to this area, in px',
+              properties: {
+                left: { type: 'number' },
+                top: { type: 'number' },
+                right: { type: 'number' },
+                bottom: { type: 'number' },
+              },
+              required: ['left', 'top', 'right', 'bottom'],
+            },
+            trim: { type: 'boolean', description: 'Trim transparent edges (default false)' },
+            max_width: {
+              type: 'number',
+              description: 'Shrink to fit this width, keeping proportions',
+            },
+            max_height: {
+              type: 'number',
+              description: 'Shrink to fit this height, keeping proportions',
+            },
+            scale: { type: 'number', description: 'Resize by this percent (default 100)' },
+            canvas_width: {
+              type: 'number',
+              description: 'Final canvas width in px, content centred',
+            },
+            canvas_height: {
+              type: 'number',
+              description: 'Final canvas height in px, content centred',
+            },
+            padding: { type: 'number', description: 'Transparent margin in px on every side' },
+            background: {
+              type: 'string',
+              description: 'Hex colour behind everything instead of transparency, e.g. "#FF00FF"',
+            },
+          },
+          required: ['output_path'],
+        },
+      },
+      handler: async (args) => exportComposite(connection, args),
+    },
+    {
+      tool: {
         name: 'photoshop_export_layer_as_png',
         description:
           'Export a layer as an isolated PNG file: the layer at "path" if given, otherwise the active layer. ' +
@@ -468,6 +535,12 @@ export interface ExportOptions {
   scale: number;
   background?: { r: number; g: number; b: number };
   clipToCanvas: boolean;
+  /** export_composite only: shrink to fit inside these, keeping proportions. */
+  maxWidth?: number;
+  maxHeight?: number;
+  /** export_composite only: final canvas size, content centred. */
+  canvasWidth?: number;
+  canvasHeight?: number;
 }
 
 /** Validates the optional export arguments. */
@@ -510,6 +583,25 @@ export function exportFinishJs(trim: boolean, o: ExportOptions): string {
       `executeAction(app.charIDToTypeID('ImgS'), isz, DialogModes.NO);`
     );
   }
+  if (o.maxWidth !== undefined || o.maxHeight !== undefined) {
+    lines.push(
+      `var fitK = Math.min(1, ${o.maxWidth ?? 'Infinity'} / newDoc.width.as('px'), ${o.maxHeight ?? 'Infinity'} / newDoc.height.as('px'));`,
+      `if (fitK < 1) {`,
+      `  var fsz = new ActionDescriptor();`,
+      `  fsz.putUnitDouble(app.charIDToTypeID('Wdth'), app.charIDToTypeID('#Pxl'), Math.max(1, Math.round(newDoc.width.as('px') * fitK)));`,
+      `  fsz.putBoolean(app.stringIDToTypeID('scaleStyles'), true);`,
+      `  fsz.putBoolean(app.charIDToTypeID('CnsP'), true);`,
+      `  fsz.putEnumerated(app.charIDToTypeID('Intr'), app.charIDToTypeID('Intp'), app.charIDToTypeID('Bcbc'));`,
+      `  executeAction(app.charIDToTypeID('ImgS'), fsz, DialogModes.NO);`,
+      `}`
+    );
+  }
+  if (o.canvasWidth !== undefined || o.canvasHeight !== undefined) {
+    lines.push(
+      `newDoc.resizeCanvas(UnitValue(${o.canvasWidth ?? "newDoc.width.as('px')"}, 'px'), ` +
+        `UnitValue(${o.canvasHeight ?? "newDoc.height.as('px')"}, 'px'), AnchorPosition.MIDDLECENTER);`
+    );
+  }
   if (o.padding > 0) {
     lines.push(
       `newDoc.resizeCanvas(UnitValue(newDoc.width.as('px') + ${2 * o.padding}, 'px'), ` +
@@ -527,6 +619,228 @@ export function exportFinishJs(trim: boolean, o: ExportOptions): string {
     );
   }
   return lines.join('\n        ');
+}
+
+export interface CompositeArgs {
+  outputPath: string;
+  onlyLayers: string[];
+  hideLayers: string[];
+  region?: { left: number; top: number; right: number; bottom: number };
+  trim: boolean;
+  opts: ExportOptions;
+}
+
+/** Validates export_composite arguments. */
+export function compositeArgs(args: Record<string, unknown>): CompositeArgs {
+  const outputPath = requireString(args, 'output_path');
+  const list = (name: string) => {
+    const v = args[name] === undefined ? [] : args[name];
+    if (!Array.isArray(v) || !v.every((p) => typeof p === 'string' && p !== '')) {
+      throw new Error(`${name} must be an array of layer paths`);
+    }
+    return v as string[];
+  };
+  let region: CompositeArgs['region'];
+  if (args.region !== undefined) {
+    const r = args.region as Record<string, unknown>;
+    const n = ['left', 'top', 'right', 'bottom'].map((k) => Number(r?.[k]));
+    if (!n.every(Number.isFinite) || n[2] <= n[0] || n[3] <= n[1]) {
+      throw new Error('region needs numeric left < right and top < bottom');
+    }
+    region = { left: n[0], top: n[1], right: n[2], bottom: n[3] };
+  }
+  const size = (name: string) => {
+    if (args[name] === undefined) return undefined;
+    const v = optionalNumber(args, name, 0);
+    if (!Number.isInteger(v) || v < 1 || v > 30000) {
+      throw new Error(`${name} must be a whole number of pixels from 1 to 30000, got ${v}`);
+    }
+    return v;
+  };
+  const opts: ExportOptions = {
+    ...exportOptions(args),
+    clipToCanvas: true,
+    maxWidth: size('max_width'),
+    maxHeight: size('max_height'),
+    canvasWidth: size('canvas_width'),
+    canvasHeight: size('canvas_height'),
+  };
+  return {
+    outputPath,
+    onlyLayers: list('only_layers'),
+    hideLayers: list('hide_layers'),
+    region,
+    trim: args.trim === true,
+    opts,
+  };
+}
+
+/**
+ * One script: duplicate the document, set visibility on the duplicate with
+ * batch Hide/Show commands (by layer ID; per-layer DOM walks timed out on
+ * large documents), crop, finish (trim, fit, scale, canvas, padding,
+ * background), save the layered duplicate as PNG (keeps transparency), close
+ * it, and return to the original.
+ */
+export function scriptExportComposite(a: CompositeArgs, tempName: string): string {
+  const q = (paths: string[]) => `[${paths.map((p) => jsxString(p)).join(', ')}]`;
+  return `
+    if (app.documents.length === 0) throw new Error('No active document');
+    function cTID(s) { return app.charIDToTypeID(s); }
+    function sTID(s) { return app.stringIDToTypeID(s); }
+    function tSID(t) { return app.typeIDToStringID(t); }
+    var origDoc = app.activeDocument;
+    var newDoc = origDoc.duplicate(${jsxString(tempName)});
+    app.activeDocument = newDoc;
+
+    function layerRef(index, prop) {
+      var r = new ActionReference();
+      if (prop) r.putProperty(cTID('Prpr'), sTID(prop));
+      r.putIndex(cTID('Lyr '), index);
+      return r;
+    }
+    function getProp(index, prop) {
+      try { return executeActionGet(layerRef(index, prop)); } catch (e) { return null; }
+    }
+    var docRef = new ActionReference();
+    docRef.putEnumerated(cTID('Dcmn'), cTID('Ordn'), cTID('Trgt'));
+    var layerCount = executeActionGet(docRef).getInteger(sTID('numberOfLayers'));
+    var firstIndex = getProp(0, 'layerID') ? 0 : 1;
+
+    // Layer index of the duplicate: names, ids and nesting, top to bottom.
+    var root = { children: [] }, stack = [root], all = [];
+    for (var i = layerCount; i >= firstIndex; i--) {
+      var sec = getProp(i, 'layerSection');
+      if (!sec) continue;
+      var section = tSID(sec.getEnumerationValue(sTID('layerSection')));
+      if (section === 'layerSectionEnd') { if (stack.length > 1) stack.pop(); continue; }
+      var parent = stack[stack.length - 1];
+      var node = {
+        id: getProp(i, 'layerID').getInteger(sTID('layerID')),
+        name: getProp(i, 'name').getString(cTID('Nm  ')),
+        visible: getProp(i, 'visible').getBoolean(cTID('Vsbl')),
+        isGroup: section === 'layerSectionStart',
+        parent: parent,
+        children: []
+      };
+      parent.children.push(node);
+      all.push(node);
+      if (node.isGroup) stack.push(node);
+    }
+    function segment(n) {
+      var sib = n.parent.children, count = 0, pos = 0;
+      for (var k = 0; k < sib.length; k++) if (sib[k].name === n.name) { if (sib[k] === n) pos = count; count++; }
+      return count > 1 ? n.name + '[' + pos + ']' : n.name;
+    }
+    function pathOf(n) {
+      var parts = [];
+      for (var x = n; x && x !== root; x = x.parent) parts.unshift(segment(x));
+      return parts.join('/');
+    }
+    var byPath = {};
+    for (var a2 = 0; a2 < all.length; a2++) byPath[pathOf(all[a2])] = all[a2];
+    function resolve(paths, what) {
+      var out = [], missing = [];
+      for (var p = 0; p < paths.length; p++) {
+        if (byPath.hasOwnProperty(paths[p])) out.push(byPath[paths[p]]); else missing.push(paths[p]);
+      }
+      if (missing.length) throw new Error(what + ' not found: ' + missing.join(', ') +
+        '. Paths need [n] where siblings share a name; photoshop_find_layers returns exact paths.');
+      return out;
+    }
+    var keep = resolve(${q(a.onlyLayers)}, 'only_layers');
+    var hide = resolve(${q(a.hideLayers)}, 'hide_layers');
+
+    var toHide = [], toShow = [];
+    function want(n, v) { if (n.visible !== v) (v ? toShow : toHide).push(n.id); n.visible = v; }
+    if (keep.length) {
+      var keepIds = {}, pathIds = {};
+      for (var k1 = 0; k1 < keep.length; k1++) {
+        keepIds[keep[k1].id] = true;
+        for (var up = keep[k1].parent; up && up !== root; up = up.parent) pathIds[up.id] = true;
+      }
+      (function apply(list) {
+        for (var c = 0; c < list.length; c++) {
+          var n = list[c];
+          if (keepIds[n.id]) { want(n, true); continue; }
+          if (pathIds[n.id]) { want(n, true); apply(n.children); continue; }
+          want(n, false);
+        }
+      })(root.children);
+    }
+    for (var h = 0; h < hide.length; h++) want(hide[h], false);
+
+    function batch(ids, eventId) {
+      if (!ids.length) return;
+      var list = new ActionList();
+      for (var b = 0; b < ids.length; b++) {
+        var r = new ActionReference();
+        r.putIdentifier(cTID('Lyr '), ids[b]);
+        list.putReference(r);
+      }
+      var d = new ActionDescriptor();
+      d.putList(cTID('null'), list);
+      executeAction(cTID(eventId), d, DialogModes.NO);
+    }
+    batch(toHide, 'Hd  ');
+    batch(toShow, 'Shw ');
+
+    ${
+      a.region === undefined
+        ? ''
+        : `newDoc.crop([UnitValue(${a.region.left}, 'px'), UnitValue(${a.region.top}, 'px'), UnitValue(${a.region.right}, 'px'), UnitValue(${a.region.bottom}, 'px')]);`
+    }
+    ${exportFinishJs(a.trim, a.opts)}
+
+    var pngOpts = new PNGSaveOptions();
+    pngOpts.compression = 6;
+    newDoc.saveAs(new File(${jsxString(a.outputPath)}), pngOpts, true);
+    var w = Math.round(newDoc.width.as('px')), hgt = Math.round(newDoc.height.as('px'));
+    newDoc.close(SaveOptions.DONOTSAVECHANGES);
+    app.activeDocument = origDoc;
+    return {
+      exported: true,
+      path: ${jsxString(a.outputPath)},
+      width: w,
+      height: hgt,
+      hidden: toHide.length,
+      shown: toShow.length,
+      document: origDoc.name
+    };
+  `;
+}
+
+async function exportComposite(
+  connection: PhotoshopConnection,
+  args: Record<string, unknown>
+): Promise<ToolResult> {
+  const tempName = `export_composite_tmp_${process.pid}`;
+  const api = await new PhotoshopAPIFactory(connection).createAPI();
+  let origDocName: string | undefined;
+  try {
+    const a = compositeArgs(args);
+    origDocName = String(
+      await api.executeScript(
+        `if (app.documents.length === 0) throw new Error('No active document'); return app.activeDocument.name;`
+      )
+    );
+    const result = await api.executeScript(
+      scriptExportComposite(a, tempName),
+      LONG_SCRIPT_TIMEOUT_MS
+    );
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+  } catch (error) {
+    await cleanUpExportDocs(api, [tempName], origDocName);
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
+  }
 }
 
 /**
