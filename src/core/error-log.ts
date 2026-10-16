@@ -1,7 +1,7 @@
 /**
  * A local log of failed tool calls, so a bug report can say what actually
  * failed instead of what someone remembers. It never leaves the machine on its
- * own: photoshop_report_issue reads it into a draft the user reviews before
+ * own: photoshop_draft_issue reads it into a draft the user reviews before
  * anything is submitted.
  *
  * One JSON object per line in ~/.photoshop-mcp/errors.jsonl (override the

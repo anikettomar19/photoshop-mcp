@@ -84,7 +84,7 @@ The first launch clones and builds the server, so it takes a little longer. **Af
 | **Unity** (3) | `get_layer_rt` (RectTransform values), `prep_ui_for_unity` (export a whole PSD with a manifest), `extract_sprite_to_catalog` |
 | **Sprite search & catalog** (5) | `find_similar_sprites`, `rebuild_sprite_index`, `catalog_search`, `catalog_tag`, `catalog_list` |
 | **Connection** (2) | `ping`, `get_version` |
-| **Feedback** (1) | `report_issue` (drafts a GitHub issue; never submits it) |
+| **Feedback** (1) | `draft_issue` (drafts a GitHub issue offline; never submits it) |
 
 Live-Photoshop tools are prefixed `photoshop_` (e.g. `photoshop_get_layer_tree`); the sprite and catalog tools are not.
 
@@ -92,7 +92,7 @@ Live-Photoshop tools are prefixed `photoshop_` (e.g. `photoshop_get_layer_tree`)
 
 Found a bug, or doing something often enough that it deserves its own tool? [Open an issue](https://github.com/anikettomar19/photoshop-mcp/issues/new/choose): there are forms for bug reports and tool requests.
 
-Your agent can draft it for you. Ask it to report the problem and it calls `photoshop_report_issue`, which:
+Your agent can draft it for you. Ask it to report the problem and it calls `photoshop_draft_issue`, which:
 - fills in the photoshop-mcp, Photoshop, OS and Node versions
 - for bugs, attaches the recent failed calls from the local error log
 - replaces your home folder with `~`

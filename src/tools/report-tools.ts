@@ -20,15 +20,15 @@ export function createReportTools(
   return [
     {
       tool: {
-        name: 'photoshop_report_issue',
+        name: 'photoshop_draft_issue',
         description:
-          'Draft a GitHub issue for this MCP server: a bug in a tool, or a tool that is missing ' +
-          '(e.g. you had to fall back to photoshop_execute_script for something common). Fills in ' +
-          'versions and, for bugs, the recent failed calls from the local error log, with home ' +
-          'folders replaced by "~". It does NOT submit anything: it returns the draft and a link ' +
-          'that opens a pre-filled GitHub form. Show the draft to the user, mention anything ' +
-          'private it may still contain (file or layer names), and let them open the link and ' +
-          'submit. Never submit for them without being asked.',
+          'Offline: only builds text. Makes no network request and submits nothing. Drafts a ' +
+          'GitHub issue for this MCP server: a bug in a tool, or a tool that is missing (e.g. you ' +
+          'had to fall back to photoshop_execute_script for something common). Fills in versions ' +
+          'and, for bugs, the recent failed calls from the local error log, with home folders ' +
+          'replaced by "~". Returns the draft and a link that opens a pre-filled GitHub form. Show ' +
+          'the draft to the user, mention anything private it may still contain (file or layer ' +
+          'names), and let them open the link and submit. Never submit for them without being asked.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -62,7 +62,7 @@ export function createReportTools(
           required: ['kind', 'title', 'what_happened'],
         },
       },
-      handler: async (args) => reportIssue(connection, serverVersion, args),
+      handler: async (args) => draftIssue(connection, serverVersion, args),
     },
   ];
 }
@@ -176,7 +176,7 @@ async function photoshopVersion(connection: PhotoshopConnection): Promise<string
   }
 }
 
-async function reportIssue(
+async function draftIssue(
   connection: PhotoshopConnection,
   serverVersion: string,
   args: Record<string, unknown>
