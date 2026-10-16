@@ -30,6 +30,10 @@ import { createSpriteTools } from '../tools/sprite-tools.js';
 import { createOcrTools } from '../tools/ocr-tools.js';
 import { createSmartObjectTools } from '../tools/smart-object-tools.js';
 import { createCompoundTools } from '../tools/compound-tools.js';
+import { createReportTools } from '../tools/report-tools.js';
+import { recordToolError } from './error-log.js';
+
+const SERVER_VERSION = '0.2.0';
 
 export class PhotoshopMCPServer {
   private server: Server;
@@ -45,7 +49,7 @@ export class PhotoshopMCPServer {
     this.server = new Server(
       {
         name: 'photoshop-mcp',
-        version: '0.2.0',
+        version: SERVER_VERSION,
       },
       {
         capabilities: {
@@ -192,6 +196,11 @@ export class PhotoshopMCPServer {
       this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
+    // Issue drafting — no Photoshop session required
+    createReportTools(connection, SERVER_VERSION).forEach((tool) => {
+      this.toolRegistry.register(tool.tool.name, tool);
+    });
+
     this.logger.info(`Registered ${this.toolRegistry.count()} tools`);
   }
 
@@ -215,9 +224,20 @@ export class PhotoshopMCPServer {
         // Update session activity
         this.session.updateActivity();
 
+        if (result.isError) {
+          const first = result.content?.[0];
+          const text = first && first.type === 'text' ? first.text : 'error';
+          recordToolError(request.params.name, args, text, SERVER_VERSION);
+        }
         return result;
       } catch (error) {
         this.logger.error(`Tool execution failed: ${request.params.name}`, error);
+        recordToolError(
+          request.params.name,
+          (request.params.arguments as Record<string, unknown>) || {},
+          error instanceof Error ? error.message : String(error),
+          SERVER_VERSION
+        );
         return {
           content: [
             {

@@ -58,6 +58,8 @@ The first launch clones and builds the server, so it takes a little longer. **Af
 | `UNITY_PROJECT_ROOT` | Unity project for the sprite and catalog tools (each call can also pass `project_root`) | none |
 | `PHOTOSHOP_MCP_TIMEOUT_MS` | Default time limit per Photoshop script | `30000` |
 | `LOG_LEVEL` | `0` debug, `1` info, `2` warn, `3` error (logs go to stderr) | `1` |
+| `PHOTOSHOP_MCP_ERROR_LOG` | `off` stops logging failed tool calls to the local error log (see [Reporting issues](#reporting-issues)) | on |
+| `PHOTOSHOP_MCP_HOME` | Folder for the error log | `~/.photoshop-mcp` |
 
 ## Tools
 
@@ -82,8 +84,25 @@ The first launch clones and builds the server, so it takes a little longer. **Af
 | **Unity** (3) | `get_layer_rt` (RectTransform values), `prep_ui_for_unity` (export a whole PSD with a manifest), `extract_sprite_to_catalog` |
 | **Sprite search & catalog** (5) | `find_similar_sprites`, `rebuild_sprite_index`, `catalog_search`, `catalog_tag`, `catalog_list` |
 | **Connection** (2) | `ping`, `get_version` |
+| **Feedback** (1) | `report_issue` (drafts a GitHub issue; never submits it) |
 
 Live-Photoshop tools are prefixed `photoshop_` (e.g. `photoshop_get_layer_tree`); the sprite and catalog tools are not.
+
+## Reporting issues
+
+Found a bug, or doing something often enough that it deserves its own tool? [Open an issue](https://github.com/anikettomar19/photoshop-mcp/issues/new/choose): there are forms for bug reports and tool requests.
+
+Your agent can draft it for you. Ask it to report the problem and it calls `photoshop_report_issue`, which:
+- fills in the photoshop-mcp, Photoshop, OS and Node versions
+- for bugs, attaches the recent failed calls from the local error log
+- replaces your home folder with `~`
+- returns the draft and a link to a pre-filled GitHub form
+
+**Nothing is submitted for you.** Open the link, check the text (file, layer and document names are kept), and submit it yourself.
+
+The error log lives at `~/.photoshop-mcp/errors.jsonl`. It never leaves your machine unless you paste it into an issue.
+- It keeps up to the last 500 failed calls: the tool, its arguments (paths redacted, long values cut) and the error.
+- Set `PHOTOSHOP_MCP_ERROR_LOG=off` to disable it, or `PHOTOSHOP_MCP_HOME` to move it.
 
 ## How calls behave
 
