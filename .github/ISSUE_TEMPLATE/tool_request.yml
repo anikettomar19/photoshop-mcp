@@ -1,0 +1,31 @@
+name: Tool request
+description: Something you do often has no tool, so it needs photoshop_execute_script or many calls.
+title: "[Tool request] "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The most useful requests show the workaround: the script or the chain of calls you used instead.
+  - type: textarea
+    id: need
+    attributes:
+      label: What you needed to do
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-tool
+    attributes:
+      label: The tool you'd want
+      description: A name, its arguments and what it returns, if you have one in mind.
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround used
+      description: The execute_script code or the sequence of tool calls.
+      render: text
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      render: text
