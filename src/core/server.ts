@@ -27,6 +27,7 @@ import { createLayerOrganizeTools } from '../tools/layer-organize-tools.js';
 import { createPsdTools } from '../tools/psd-tools.js';
 import { createUtilityTools } from '../tools/utility-tools.js';
 import { createLayerEffectsTools } from '../tools/layer-effects-tools.js';
+import { createShapeTools } from '../tools/shape-tools.js';
 import { createSpriteTools } from '../tools/sprite-tools.js';
 import { createOcrTools } from '../tools/ocr-tools.js';
 import { createSmartObjectTools } from '../tools/smart-object-tools.js';
@@ -175,6 +176,11 @@ export class PhotoshopMCPServer {
 
     const layerEffectsTools = createLayerEffectsTools(connection);
     layerEffectsTools.forEach((tool) => {
+      this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
+    });
+
+    const shapeTools = createShapeTools(connection);
+    shapeTools.forEach((tool) => {
       this.toolRegistry.register(tool.tool.name, withDocumentTarget(tool, connection));
     });
 
