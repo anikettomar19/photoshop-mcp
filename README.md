@@ -75,7 +75,7 @@ The first launch clones and builds the server, so it takes a little longer. **Af
 | **Image & canvas** (3) | `resize_image`, `resize_canvas`, `crop_document` |
 | **Adjustments** (7) | `adjust_brightness_contrast`, `adjust_hue_saturation`, `apply_levels`, `auto_levels`, `auto_contrast`, `desaturate`, `invert` |
 | **Filters** (4) | `apply_gaussian_blur`, `apply_sharpen`, `apply_noise`, `apply_motion_blur` |
-| **Selections & masks** (7) | `select_rectangle`, `select_all`, `deselect`, `invert_selection`, `create_layer_mask`, `apply_layer_mask`, `delete_layer_mask` |
+| **Selections & masks** (10) | `select_rectangle`, `select_ellipse`, `select_layer_pixels`, `select_color_range`, `select_all`, `deselect`, `invert_selection`, `create_layer_mask`, `apply_layer_mask`, `delete_layer_mask` |
 | **Export** (2) | `export_layer_as_png`, `batch_export_layers` |
 | **Smart objects** (2) | `replace_smart_object`, `swap_mockup_asset` |
 | **Placement & guides** (3) | `place_image`, `add_guide`, `clear_guides` |
