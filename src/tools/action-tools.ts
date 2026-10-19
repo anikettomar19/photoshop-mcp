@@ -2,9 +2,7 @@ import { ToolDefinition, ToolResult } from '../core/tool-registry.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { ExtendScriptSnippets } from '../api/extendscript.js';
-import { requireString } from '../utils/args.js';
-
-const MAX_TIMEOUT_SECONDS = 1800;
+import { requireString, optionalTimeoutMs, MAX_TIMEOUT_SECONDS } from '../utils/args.js';
 
 export function createActionTools(connection: PhotoshopConnection): ToolDefinition[] {
   return [
@@ -97,19 +95,14 @@ async function executeCustomScript(
   args: Record<string, unknown>
 ): Promise<ToolResult> {
   const code = requireString(args, 'code');
-  const seconds = typeof args.timeout_seconds === 'number' ? args.timeout_seconds : undefined;
-  if (seconds !== undefined && !(seconds > 0 && seconds <= MAX_TIMEOUT_SECONDS)) {
-    throw new Error(
-      `timeout_seconds must be between 0 and ${MAX_TIMEOUT_SECONDS} (got ${seconds})`
-    );
-  }
+  const timeoutMs = optionalTimeoutMs(args, undefined);
 
   try {
     const apiFactory = new PhotoshopAPIFactory(connection);
     const api = await apiFactory.createAPI();
 
     const script = ExtendScriptSnippets.executeCustomScript(code);
-    const result = await api.executeScript(script, seconds && seconds * 1000);
+    const result = await api.executeScript(script, timeoutMs);
 
     return {
       content: [
