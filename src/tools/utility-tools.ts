@@ -621,6 +621,59 @@ export function exportFinishJs(trim: boolean, o: ExportOptions): string {
   return lines.join('\n        ');
 }
 
+/**
+ * ExtendScript helpers for the clipping-mask export. psLayerIndexPath gives the
+ * active layer's position in the tree (a duplicate document has the same
+ * tree), so the duplicate is searched by position rather than by name, which
+ * picked the first of two same-named layers.
+ *
+ * psIsolateForClipExport hides everything except the target, its clip base
+ * and the groups above them. Only siblings along that path are hidden, never
+ * the contents of the target or the base: hiding every layer recursively left
+ * a group used as a clip base with all its children off, so the export came
+ * out empty, and turning them all back on would show children that are hidden
+ * in the document.
+ */
+export const clipExportJs = `
+function psLayerIndexPath(layer) {
+  var path = [];
+  for (var n = layer; n.typename !== 'Document'; n = n.parent) {
+    var sibs = n.parent.layers;
+    for (var i = 0; i < sibs.length; i++) {
+      if (sibs[i] == n) { path.unshift(i); break; }
+    }
+  }
+  return path.join(',');
+}
+
+function psIsolateForClipExport(doc, indexPath) {
+  var idx = indexPath.split(',');
+  var collection = doc.layers;
+  var layer = null;
+  for (var p = 0; p < idx.length; p++) {
+    var at = parseInt(idx[p], 10);
+    var keep = [at];
+    if (p === idx.length - 1) {
+      // The clip base is the first layer below the target that is not
+      // itself clipped; the clipped layers in between are hidden.
+      for (var ci = at + 1; ci < collection.length; ci++) {
+        var cg = false;
+        try { cg = collection[ci].grouped === true; } catch (e) {}
+        if (!cg) { keep.push(ci); break; }
+      }
+    }
+    for (var i = 0; i < collection.length; i++) {
+      var kept = false;
+      for (var k = 0; k < keep.length; k++) if (keep[k] === i) kept = true;
+      collection[i].visible = kept;
+    }
+    layer = collection[at];
+    if (p < idx.length - 1) collection = layer.layers;
+  }
+  return { layer: layer, clipBase: keep.length > 1 ? collection[keep[1]] : null };
+}
+`;
+
 export interface CompositeArgs {
   outputPath: string;
   onlyLayers: string[];
@@ -911,21 +964,24 @@ async function exportLayerAsPng(
     // Step 0: Detect if layer is clipped
     // Return as pipe-delimited string since ExtendScript toSource() isn't valid JSON
     const detection = await api.executeScript(`
+      ${clipExportJs}
       if (app.documents.length === 0) throw new Error('No active document');
       var srcLayer = app.activeDocument.activeLayer;
       var isClipped = false;
       try { isClipped = srcLayer.grouped; } catch(e) {}
-      return srcLayer.name + '|' + (isClipped ? '1' : '0') + '|' + app.activeDocument.name;
+      return (isClipped ? '1' : '0') + '|' + psLayerIndexPath(srcLayer) + '|' +
+        srcLayer.name.length + '|' + srcLayer.name + app.activeDocument.name;
     `);
 
-    // Parse from the right — layer names may contain '|', doc name is last.
+    // clipped | index path | layer name length | layer name + doc name. Both
+    // names may contain '|', so the layer name is cut by its length.
     const detStr = String(detection);
-    const docSep = detStr.lastIndexOf('|');
-    origDocName = detStr.substring(docSep + 1);
-    const rest = detStr.substring(0, docSep);
-    const sepIdx = rest.lastIndexOf('|');
-    const layerName = rest.substring(0, sepIdx);
-    const isClipped = rest.substring(sepIdx + 1) === '1';
+    const m = /^([01])\|([\d,]+)\|(\d+)\|([\s\S]*)$/.exec(detStr);
+    if (!m) throw new Error(`Unexpected layer detection result: ${detStr}`);
+    const isClipped = m[1] === '1';
+    const indexPath = m[2];
+    const layerName = m[4].substring(0, Number(m[3]));
+    origDocName = m[4].substring(Number(m[3]));
 
     // Unique temp doc names — lets every step resolve its document BY NAME
     // instead of trusting app.activeDocument, which a user click between the
@@ -953,45 +1009,11 @@ async function exportLayerAsPng(
         var dupDoc = origDoc.duplicate(${jsxString(dupDocName)});
         app.activeDocument = dupDoc;
 
-        function hideAll(layers) {
-          for (var i = 0; i < layers.length; i++) {
-            layers[i].visible = false;
-            if (layers[i].typename === 'LayerSet') hideAll(layers[i].layers);
-          }
-        }
-        hideAll(dupDoc.layers);
-
-        function findInfo(layers, name, ancestors) {
-          ancestors = ancestors || [];
-          for (var i = 0; i < layers.length; i++) {
-            if (layers[i].name === name) {
-              return { layer: layers[i], parent: layers, index: i, ancestors: ancestors };
-            }
-            if (layers[i].typename === 'LayerSet') {
-              var r = findInfo(layers[i].layers, name, ancestors.concat([layers[i]]));
-              if (r) return r;
-            }
-          }
-          return null;
-        }
-
-        var info = findInfo(dupDoc.layers, ${jsxString(layerName)});
-        if (!info) throw new Error('Layer not found in duplicate: ' + ${jsxString(layerName)});
-
-        info.layer.visible = true;
-
-        var clipBase = null;
-        for (var ci = info.index + 1; ci < info.parent.length; ci++) {
-          var candidate = info.parent[ci];
-          var cg = false;
-          try { cg = candidate.grouped; } catch(e) {}
-          if (!cg) { clipBase = candidate; break; }
-        }
-        if (clipBase) clipBase.visible = true;
-
-        for (var ai = 0; ai < info.ancestors.length; ai++) {
-          info.ancestors[ai].visible = true;
-        }
+        ${clipExportJs}
+        var info = psIsolateForClipExport(dupDoc, ${jsxString(indexPath)});
+        if (info.layer.name !== ${jsxString(layerName)})
+          throw new Error('Layer at the same position in the duplicate is "' + info.layer.name + '", expected ' + ${jsxString(layerName)});
+        var clipBase = info.clipBase;
         ${
           opts.clipToCanvas
             ? ''
