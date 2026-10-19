@@ -3,7 +3,13 @@ import { parseHexColor } from './layer-effects-tools.js';
 import { PhotoshopConnection } from '../platform/connection.js';
 import { PhotoshopAPIFactory } from '../api/photoshop-api.js';
 import { LONG_SCRIPT_TIMEOUT_MS } from '../platform/script-executor.js';
-import { optionalNumber, requireString, requireNumber } from '../utils/args.js';
+import {
+  optionalNumber,
+  optionalTimeoutMs,
+  requireString,
+  requireNumber,
+  MAX_TIMEOUT_SECONDS,
+} from '../utils/args.js';
 import { jsxString } from '../utils/jsx.js';
 import { layerPathResolver } from '../api/extendscript.js';
 
@@ -94,7 +100,12 @@ export function createUtilityTools(connection: PhotoshopConnection): ToolDefinit
               type: 'number',
               description: 'Shrink to fit this height, keeping proportions',
             },
-            scale: { type: 'number', description: 'Resize by this percent (default 100)' },
+            scale: {
+              type: 'number',
+              description:
+                'Resize by this percent (default 100), e.g. 50 for a half-size export. Layer ' +
+                'effects (strokes, shadows, glows) are scaled with it, like Image Size with Scale Styles on.',
+            },
             canvas_width: {
               type: 'number',
               description: 'Final canvas width in px, content centred',
@@ -368,6 +379,12 @@ export function createUtilityTools(connection: PhotoshopConnection): ToolDefinit
                 'Target document by name (e.g. "Beach buddies Popup.psd"). ' +
                 'Recommended in multi-document sessions — without it the export runs ' +
                 'against whatever document currently has focus.',
+            },
+            timeout_seconds: {
+              type: 'number',
+              description:
+                `Optional time limit in seconds for the whole batch (default 300, max ${MAX_TIMEOUT_SECONDS}). ` +
+                'Raise it for many layers or a large document instead of splitting the batch.',
             },
           },
           required: ['layers'],
@@ -1326,6 +1343,7 @@ export async function batchExportLayers(
       isError: true,
     };
   }
+  const timeoutMs = optionalTimeoutMs(args, LONG_SCRIPT_TIMEOUT_MS);
 
   try {
     const api = await new PhotoshopAPIFactory(connection).createAPI();
@@ -1546,7 +1564,7 @@ export async function batchExportLayers(
 
       return results.join('\\n');
     `,
-      LONG_SCRIPT_TIMEOUT_MS
+      timeoutMs
     );
 
     // Parse pipe-delimited results into structured JSON

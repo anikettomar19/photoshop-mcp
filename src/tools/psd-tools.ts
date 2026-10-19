@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { existsSync } from 'fs';
 import { requireString } from '../utils/args.js';
+import { LAYER_TREE_MAX_CHARS } from './layer-tree-format.js';
 
 /** Checks the PSD exists before spawning Python, which otherwise fails with a traceback. */
 function requirePsd(args: Record<string, unknown>): string {
@@ -51,6 +52,76 @@ function runPython(args: string[]): Promise<string> {
     });
     python.on('error', (err) => reject(new Error(`Failed to spawn python3: ${err.message}`)));
   });
+}
+
+interface PsdTreeEntry {
+  path: string;
+  type: string;
+  depth: number;
+  parent_path: string;
+  child_count?: number;
+  truncated?: boolean;
+}
+
+/**
+ * Keeps get_psd_layer_tree output within what a client accepts from one tool
+ * call. A whole UI document came back at up to 220k characters and was
+ * rejected. If the tree is over `maxChars`, it is cut to the deepest level
+ * that fits; groups cut off report child_count and truncated:true, as with
+ * max_depth, and a note says how to walk further.
+ */
+export function limitPsdLayerTree(output: string, maxChars = LAYER_TREE_MAX_CHARS): string {
+  if (output.length <= maxChars) return output;
+  const nl = output.indexOf('\n');
+  const json = nl < 0 ? output : output.slice(0, nl);
+  const rest = nl < 0 ? '' : output.slice(nl);
+  let tree: { layers: PsdTreeEntry[]; note?: string };
+  try {
+    tree = JSON.parse(json);
+  } catch {
+    return output;
+  }
+  const all = tree.layers;
+  const childCount = new Map<string, number>();
+  for (const l of all) childCount.set(l.parent_path, (childCount.get(l.parent_path) ?? 0) + 1);
+  const render = (layers: PsdTreeEntry[], note: string) =>
+    JSON.stringify({ ...tree, note, layers }) + rest;
+
+  const cutAt = (depth: number) =>
+    all
+      .filter((l) => l.depth <= depth)
+      .map((l) =>
+        l.depth === depth && childCount.has(l.path)
+          ? { ...l, child_count: childCount.get(l.path), truncated: true }
+          : l
+      );
+
+  const deepest = all.reduce((d, l) => Math.max(d, l.depth), 0);
+  const whole = output.length;
+  for (let depth = deepest - 1; depth >= 1; depth--) {
+    const kept = cutAt(depth);
+    const text = render(
+      kept,
+      `Output limited to ${depth} level(s) to stay under ${maxChars} characters (the full tree is ` +
+        `${whole}). Groups marked truncated have more inside: pass group_path to walk one of them, ` +
+        'or max_depth to choose the depth.'
+    );
+    if (text.length <= maxChars) return text;
+  }
+
+  // Even the top level alone is too big: show the first layers only.
+  const top = cutAt(1);
+  let n = top.length;
+  let text = '';
+  do {
+    text = render(
+      top.slice(0, n),
+      `Even the top level is over ${maxChars} characters; showing the first ${n} of ${top.length} ` +
+        'top-level layers. Pass group_path to walk one group.'
+    );
+    n = Math.floor(n / 2);
+  } while (text.length > maxChars && n >= 1);
+  return text;
 }
 
 function ok(text: string): { content: Array<{ type: 'text'; text: string }>; isError: false } {
@@ -168,7 +239,8 @@ export function createPsdTools(): ToolDefinition[] {
             max_depth: {
               type: 'number',
               description:
-                'Optional cap on levels returned (1 = only the direct children). Groups cut off report child_count and truncated:true.',
+                'Optional cap on levels returned (1 = only the direct children). Groups cut off report child_count and truncated:true. ' +
+                'A tree too large for one result is cut to the deepest level that fits, with a note saying so.',
             },
           },
           required: ['psd_path'],
@@ -184,7 +256,7 @@ export function createPsdTools(): ToolDefinition[] {
 
         try {
           const output = await runPython([psdPath, '--layer-tree', groupPath, maxDepth]);
-          return ok(output);
+          return ok(limitPsdLayerTree(output));
         } catch (err) {
           return fail(String(err));
         }

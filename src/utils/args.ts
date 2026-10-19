@@ -49,3 +49,24 @@ export function optionalNumber(
   }
   return value;
 }
+
+/** Upper bound for a caller-chosen script time limit. */
+export const MAX_TIMEOUT_SECONDS = 1800;
+
+/**
+ * Reads an optional `timeout_seconds` argument as milliseconds, or returns
+ * `fallbackMs` when it is absent. Throws outside (0, MAX_TIMEOUT_SECONDS].
+ */
+export function optionalTimeoutMs<T extends number | undefined>(
+  args: Record<string, unknown>,
+  fallbackMs: T
+): number | T {
+  const seconds = args.timeout_seconds;
+  if (seconds === undefined || seconds === null) return fallbackMs;
+  if (typeof seconds !== 'number' || !(seconds > 0 && seconds <= MAX_TIMEOUT_SECONDS)) {
+    throw new Error(
+      `timeout_seconds must be between 0 and ${MAX_TIMEOUT_SECONDS} (got ${JSON.stringify(seconds)})`
+    );
+  }
+  return seconds * 1000;
+}
